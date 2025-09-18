@@ -77,12 +77,12 @@ def render_header():
     with right:
         st.title(APP_TITLE)
         st.markdown(
-            "Please have your information ready before beginning. "
+            "Please have your information ready before beginning."
             "Questions: **nhcma@lutinemanagement.com**."
         )
 
 render_header()
-st.caption("Collection form for Student, Resident, and Fellow research posters (no judging).")
+st.caption("Submit your poster on this form.  You will be notified if selected to present.")
 
 # ---------- Helpers ----------
 def send_email(to_email: str, cc_email: Optional[str], subject: str, html_body: str) -> bool:
@@ -201,10 +201,9 @@ with st.form("poster_form", clear_on_submit=True):
     # Row 4: Poster file
     st.markdown("**Poster File (optional)**")
     poster_file = st.file_uploader("Upload PDF", type=["pdf"], key="poster_pdf")
-
+    st.markdown("*By clicking Submit, you agree that if selected, you will attend and present at the NHCMA Annual Meeting on Nov.18, 2025 at Birchwoods)**")
     submit = st.form_submit_button("Submit Poster")
 
-# Validation + submit
 # Validation + submit (DE-DUPED)
 if submit:
     required = [category, lead_author, title, abstract, contact_email]
@@ -259,7 +258,7 @@ if submit:
                         <strong>Submitted:</strong> {when}
                         {link_html}
                     </p>
-                    <p>We will contact you if additional information is needed.<br>
+                    <p>We will contact the lead author if the poster is selected for presentation.<br>
                     Questions: <a href="mailto:nhcma@lutinemanagement.com">nhcma@lutinemanagement.com</a></p>
                     <p>— NHCMA Foundation</p>
                 """
