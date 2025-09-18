@@ -35,10 +35,13 @@ TIMEZONE = "America/New_York"
 ORG_DEADLINE = datetime(2025, 10, 17, 16, 59, tzinfo=ZoneInfo(TIMEZONE))
 STU_DEADLINE = datetime(2025, 10, 19, 23, 59, tzinfo=ZoneInfo(TIMEZONE))
 
-# Supabase config
-SUPABASE_URL = os.getenv("SUPABASE_URL") or st.secrets.get("SUPABASE_URL")
-SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY") or st.secrets.get("SUPABASE_ANON_KEY")
-BUCKET = os.getenv("SUPABASE_BUCKET") or st.secrets.get("SUPABASE_BUCKET", "nhcma-uploads")
+
+# Supabase config (supports flat keys or [supabase] section)
+_sb = st.secrets.get("supabase", {})
+SUPABASE_URL = os.getenv("SUPABASE_URL") or st.secrets.get("SUPABASE_URL") or _sb.get("url")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY") or st.secrets.get("SUPABASE_ANON_KEY") or _sb.get("anon_key")
+BUCKET = os.getenv("SUPABASE_BUCKET") or st.secrets.get("SUPABASE_BUCKET") or _sb.get("bucket", "nhcma-uploads")
+
 
 @st.cache_resource(show_spinner=False)
 def supabase_client() -> Client:
@@ -49,13 +52,16 @@ def supabase_client() -> Client:
 
 sb = supabase_client()
 
-# SMTP config
-SMTP_HOST = os.getenv("SMTP_HOST") or st.secrets.get("SMTP_HOST", "smtp.office365.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT") or st.secrets.get("SMTP_PORT", 587))
-SMTP_USER = os.getenv("SMTP_USER") or st.secrets.get("SMTP_USER")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD") or st.secrets.get("SMTP_PASSWORD")
-SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL") or st.secrets.get("SMTP_FROM_EMAIL") or SMTP_USER
-SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME") or st.secrets.get("SMTP_FROM_NAME", "NHCMA Foundation Grants")
+
+# SMTP config (supports flat keys or [smtp] section)
+_smtp = st.secrets.get("smtp", {})
+SMTP_HOST = os.getenv("SMTP_HOST") or st.secrets.get("SMTP_HOST") or _smtp.get("host", "smtp.office365.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT") or st.secrets.get("SMTP_PORT") or _smtp.get("port", 587))
+SMTP_USER = os.getenv("SMTP_USER") or st.secrets.get("SMTP_USER") or _smtp.get("user")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD") or st.secrets.get("SMTP_PASSWORD") or _smtp.get("password")
+SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL") or st.secrets.get("SMTP_FROM_EMAIL") or _smtp.get("from_addr") or SMTP_USER
+SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME") or st.secrets.get("SMTP_FROM_NAME") or _smtp.get("from_name", "NHCMA Foundation Grants")
+
 
 def too_late(deadline: datetime) -> bool:
     now = datetime.now(ZoneInfo(TIMEZONE))
@@ -168,12 +174,42 @@ def build_confirmation_email(track: str, payload: Dict[str, Any], record_id: Opt
     ]
     return "\n".join(lines)
 
+
+# ----------------------------
+# Validation helpers
+# ----------------------------
+def _missing_student_fields(applicant_name, school, email, phone, project_title):
+    missing = []
+    if not (applicant_name or "").strip():
+        missing.append("Applicant Name")
+    if not (school or "").strip() or school == "— Select your school —":
+        missing.append("Medical School (select an option)")
+    if not (email or "").strip():
+        missing.append("School Email")
+    if not (phone or "").strip():
+        missing.append("Phone")
+    if not (project_title or "").strip():
+        missing.append("Project Title")
+    return missing
+
+def _missing_org_fields(org_name, applicant_name, email, project_title):
+    missing = []
+    if not (org_name or "").strip():
+        missing.append("Name of Organization")
+    if not (applicant_name or "").strip():
+        missing.append("Applicant Name")
+    if not (email or "").strip():
+        missing.append("Applicant Email")
+    if not (project_title or "").strip():
+        missing.append("Project Title")
+    return missing
+
 # ----------------------------
 # Forms with unique keys
 # ----------------------------
 def org_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]:
     st.subheader("Organization Application (2025)", anchor="org")
-    st.caption("Submission deadline: **October 17, 2025 at 4:59 PM ET**")
+    st.caption("Submission deadline: **October 17, 2025 at 4:59 PM ET**\n\n_Required fields are marked with *_.")
 
     disabled = too_late(ORG_DEADLINE)
     if disabled:
@@ -242,9 +278,9 @@ def org_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]:
 
     uploads = {}
     if submitted:
-        required = [org_name, applicant_name, email, project_title]
-        if not all(x and str(x).strip() for x in required):
-            st.warning("Please complete all required fields marked with * before submitting.", icon="⚠️")
+        missing = _missing_org_fields(org_name, applicant_name, email, project_title)
+        if missing:
+            st.warning("Please complete all required fields marked with * before submitting. Missing: " + ", ".join(missing), icon="⚠️")
             submitted = False
         elif not all([eligible_nonprofit, eligible_report, eligible_benefit]):
             st.warning("Please confirm all eligibility checkboxes.", icon="⚠️")
@@ -258,7 +294,7 @@ def org_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]:
 
 def student_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]:
     st.subheader("Medical Student Application (2025)", anchor="stu")
-    st.caption("Submission deadline: **October 19, 2025 at 11:59 PM ET**")
+    st.caption("Submission deadline: **October 19, 2025 at 11:59 PM ET**\n\n_Required fields are marked with *_.")
 
     disabled = too_late(STU_DEADLINE)
     if disabled:
@@ -267,7 +303,7 @@ def student_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]
     applicant_name = st.text_input("Applicant Name (First/Last)*", key="stu_applicant_name", disabled=disabled)
     school = st.selectbox(
         "Medical School*",
-        ["", "Frank H. Netter MD School of Medicine at Quinnipiac University", "Yale School of Medicine"],
+        ["— Select your school —", "Frank H. Netter MD School of Medicine at Quinnipiac University", "Yale School of Medicine"],
         index=0,
         key="stu_school",
         disabled=disabled
@@ -331,9 +367,13 @@ def student_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]
 
     uploads = {}
     if submitted:
-        required = [applicant_name, school, email, phone, project_title]
-        if not all(x and str(x).strip() for x in required):
-            st.warning("Please complete all required fields marked with * before submitting.", icon="⚠️")
+        # Normalize school: empty string means not selected
+        school_norm = (school or "").strip()
+        if school_norm == "— Select your school —":
+            school_norm = ""
+        missing = _missing_student_fields(applicant_name, school_norm, email, phone, project_title)
+        if missing:
+            st.warning("Please complete all required fields marked with * before submitting. Missing: " + ", ".join(missing), icon="⚠️")
             submitted = False
         elif not all([elig_enrolled, elig_report]):
             st.warning("Please confirm all eligibility checkboxes.", icon="⚠️")
@@ -455,16 +495,6 @@ with tab2:
 
 with tab3:
     if _admin_allowed():
-        # Show logout only once unlocked
-        if st.session_state.get("admin_ok"):
-            if st.button("Log out", key="admin_logout"):
-                st.session_state.pop("admin_ok", None)
-                # Use the non-experimental API on modern Streamlit
-                try:
-                    st.rerun()
-                except Exception:
-                    # Fallback if you're on an older version
-                    st.experimental_rerun()
         admin_panel()
     else:
         st.stop()
