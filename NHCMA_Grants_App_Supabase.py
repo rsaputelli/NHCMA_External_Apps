@@ -456,17 +456,55 @@ def admin_panel():
         st.info("No submissions yet.")
         return
 
-    st.dataframe(df, use_container_width=True)
-    csv = df.to_csv(index=False).encode("utf-8")
-    st.download_button("Download CSV (All Submissions)", data=csv, file_name="nhcma_grants_submissions.csv", mime="text/csv", key="admin_dl_all")
+    # Clickable links in the in-app table
+    st.dataframe(
+        df,
+        use_container_width=True,
+        column_config={
+            "Proposal URL": st.column_config.LinkColumn("Proposal URL"),
+            "Budget URL":   st.column_config.LinkColumn("Budget URL"),
+            "Other URL":    st.column_config.LinkColumn("Other URL"),
+        },
+    )
 
-    scoring_cols = ["id","track","ts_utc","applicant_name","email","phone","Org Name","School","Project Title","Budget Total"]
+    # Full CSV export
+    csv = df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "Download CSV (All Submissions)",
+        data=csv,
+        file_name="nhcma_grants_submissions.csv",
+        mime="text/csv",
+        key="admin_dl_all",
+    )
+
+    # Scoring export (include URLs)
+    scoring_cols = [
+        "id","track","ts_utc","applicant_name","email","phone",
+        "Org Name","School","Project Title","Budget Total",
+        "Proposal URL","Budget URL","Other URL",
+    ]
     export_df = df[[c for c in scoring_cols if c in df.columns]].copy()
+
     st.divider()
     st.caption("Scoring Export — key columns only")
-    st.dataframe(export_df, use_container_width=True)
+    st.dataframe(
+        export_df,
+        use_container_width=True,
+        column_config={
+            "Proposal URL": st.column_config.LinkColumn("Proposal URL"),
+            "Budget URL":   st.column_config.LinkColumn("Budget URL"),
+            "Other URL":    st.column_config.LinkColumn("Other URL"),
+        },
+    )
     csv2 = export_df.to_csv(index=False).encode("utf-8")
-    st.download_button("Download CSV (Scoring Export)", data=csv2, file_name="nhcma_grants_scoring_export.csv", mime="text/csv", key="admin_dl_scoring")
+    st.download_button(
+        "Download CSV (Scoring Export)",
+        data=csv2,
+        file_name="nhcma_grants_scoring_export.csv",
+        mime="text/csv",
+        key="admin_dl_scoring",
+    )
+
 
 # ----------------------------
 # Header / Main
