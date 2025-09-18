@@ -1,23 +1,3 @@
-
-# NHCMA Grants Streamlit App — Supabase + Keys + Email + Header Notice
-# - Unique keys per widget to avoid duplicate id errors
-# - Header with logo (logo.jpg) and instructions/notice
-# - Email confirmations via SMTP (Office365) to applicant with CC to nhcma@lutinemanagement.org
-# - Supabase (DB + Storage) for submissions & uploads
-#
-# Required secrets (Streamlit Cloud -> Secrets):
-# SUPABASE_URL = https://<ref>.supabase.co
-# SUPABASE_ANON_KEY = <anon>
-# SUPABASE_BUCKET = nhcma-uploads
-# SMTP_HOST = smtp.office365.com
-# SMTP_PORT = 587
-# SMTP_USER = <your 365 user/email>
-# SMTP_PASSWORD = <app password or auth token>
-# SMTP_FROM_EMAIL = <from email shown to recipients>
-# SMTP_FROM_NAME = NHCMA Foundation Grants
-#
-# Optional: if logo.jpg is in the repo root, it will be displayed.
-
 import os, json, smtplib
 from email.message import EmailMessage
 from datetime import datetime
@@ -27,8 +7,6 @@ from typing import Dict, Any, Tuple, Optional
 import streamlit as st
 import pandas as pd
 from supabase import create_client, Client
-SERVICE_ROLE_KEY = st.secrets.get("SUPABASE_SERVICE_ROLE_KEY")
-sb_admin = create_client(SUPABASE_URL, SERVICE_ROLE_KEY) if SERVICE_ROLE_KEY else None
 
 APP_TITLE = "NHCMA Foundation — 2025 Public Health Innovation Grants"
 TIMEZONE = "America/New_York"
@@ -37,13 +15,18 @@ TIMEZONE = "America/New_York"
 ORG_DEADLINE = datetime(2025, 10, 17, 16, 59, tzinfo=ZoneInfo(TIMEZONE))
 STU_DEADLINE = datetime(2025, 10, 19, 23, 59, tzinfo=ZoneInfo(TIMEZONE))
 
-
 # Supabase config (supports flat keys or [supabase] section)
 _sb = st.secrets.get("supabase", {})
 SUPABASE_URL = os.getenv("SUPABASE_URL") or st.secrets.get("SUPABASE_URL") or _sb.get("url")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY") or st.secrets.get("SUPABASE_ANON_KEY") or _sb.get("anon_key")
 BUCKET = os.getenv("SUPABASE_BUCKET") or st.secrets.get("SUPABASE_BUCKET") or _sb.get("bucket", "nhcma-uploads")
 
+# Create anon client
+sb = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+
+# Optional: create service-role client for bypassing RLS (server-side only)
+SERVICE_ROLE_KEY = st.secrets.get("SUPABASE_SERVICE_ROLE_KEY")
+sb_admin = create_client(SUPABASE_URL, SERVICE_ROLE_KEY) if SERVICE_ROLE_KEY else None
 
 @st.cache_resource(show_spinner=False)
 def supabase_client() -> Client:
