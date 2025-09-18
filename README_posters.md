@@ -44,7 +44,7 @@ create table public.posters (
     abstract text not null,
     poster_url text,
     contact_email text not null
-)
+);
 Bucket:
 
 nhcma-posters (private)
