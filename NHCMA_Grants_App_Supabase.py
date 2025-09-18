@@ -128,10 +128,8 @@ def insert_submission(track: str, applicant_name: str, email: str, phone: str, p
         st.error(f"Error saving submission: {e}")
     return None
 
-
 def load_submissions_df() -> pd.DataFrame:
     try:
-        # use service-role client if available (bypasses RLS), else fall back to anon
         client = sb_admin or sb
         res = client.table("submissions").select("*").order("id", desc=True).execute()
         rows = res.data or []
@@ -143,31 +141,21 @@ def load_submissions_df() -> pd.DataFrame:
     if df.empty:
         return df
 
-    # Flatten key fields from payload_json
-    payload_flat = []
-    for p in df.get("payload_json", []):
-        p = p or {}
-        payload_flat.append({
-            "Org Name": p.get("org_name", ""),
-            "Project Title": p.get("project_title", ""),
-            "School": p.get("school", ""),
-            "Advisor Name": p.get("advisor_name", ""),
-            "Budget Total": p.get("budget_total", ""),
-        })
+    # Expand payload_json into columns dynamically
+    payloads = pd.json_normalize(df["payload_json"])
+    payloads = payloads.add_prefix("Q: ")   # optional prefix for clarity
 
-    # Flatten upload URLs into separate columns
-    upload_flat = []
-    for u in df.get("uploads_json", []):
-        u = u or {}
-        upload_flat.append({
-            "Proposal URL": u.get("proposal", ""),
-            "Budget URL":   u.get("budget", ""),
-            "Other URL":    u.get("other", ""),
-        })
+    # Expand uploads_json into columns
+    uploads = pd.json_normalize(df["uploads_json"])
+    uploads = uploads.rename(columns={
+        "proposal": "Proposal URL",
+        "budget": "Budget URL",
+        "other": "Other URL"
+    })
 
-    df = pd.concat([df, pd.DataFrame(payload_flat), pd.DataFrame(upload_flat)], axis=1)
+    # Concatenate back together
+    df = pd.concat([df.drop(["payload_json","uploads_json"], axis=1), payloads, uploads], axis=1)
     return df
-
 
 # ----------------------------
 # Email
