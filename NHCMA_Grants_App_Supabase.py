@@ -120,7 +120,7 @@ def org_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]:
 
     st.markdown("**Eligibility (must confirm all):**")
     eligible_nonprofit = st.checkbox("Organization is a not-for-profit.", key="org_elig_np", disabled=disabled)
-    eligible_report = st.checkbox("Recipient will present final report at the NHCMA winter meeting in 2025 (date TBA).", key="org_elig_report", disabled=disabled)
+    eligible_report = st.checkbox("Recipient will present final report at the NHCMA winter meeting in 2026 (date TBA).", key="org_elig_report", disabled=disabled)
     eligible_benefit = st.checkbox("Funding will benefit residents of the Greater New Haven area.", key="org_elig_benefit", disabled=disabled)
 
     st.markdown("**Introduction & Purpose (≈250 words each):**")
@@ -154,7 +154,7 @@ def org_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]:
         "mission": mission,
         "eligibility": {
             "nonprofit": eligible_nonprofit,
-            "report_at_winter_meeting_2025": eligible_report,
+            "report_at_winter_meeting_2026": eligible_report,
             "benefit_gnh": eligible_benefit,
         },
         "project_title": project_title,
@@ -210,7 +210,7 @@ def student_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]
 
     st.markdown("**Eligibility (must confirm all):**")
     elig_enrolled = st.checkbox("I am currently enrolled at Quinnipiac (Netter) or Yale SOM.", key="stu_elig_enrolled", disabled=disabled)
-    elig_report = st.checkbox("If awarded, I will present results at the NHCMA winter meeting in 2025 (date TBA).", key="stu_elig_report", disabled=disabled)
+    elig_report = st.checkbox("If awarded, I will present results at the NHCMA winter meeting in 2026 (date TBA).", key="stu_elig_report", disabled=disabled)
 
     st.markdown("**Introduction & Purpose (≈250 words each):**")
     q1 = st.text_area("1) Public health issue addressed in Greater New Haven", key="stu_q1", disabled=disabled)
@@ -244,7 +244,7 @@ def student_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]
         "advisor_email": advisor_email,
         "eligibility": {
             "enrolled_qu_yale": elig_enrolled,
-            "report_at_winter_meeting_2025": elig_report,
+            "report_at_winter_meeting_2026": elig_report,
         },
         "project_title": project_title,
         "q1_issue": q1,
