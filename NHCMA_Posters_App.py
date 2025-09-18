@@ -156,29 +156,100 @@ def insert_poster(payload: Dict[str, Any]) -> Optional[int]:
         st.error(f"Error saving poster: {e}")
     return None
 
-# ---------- Form ----------
+# ---------- Form (grouped layout) ----------
 with st.form("poster_form", clear_on_submit=True):
-    category = st.selectbox("Category*", ["Student", "Resident", "Fellow"])
-    lead_author = st.text_input("Lead Author*")
-    contact_email = st.text_input("Contact Email*")
-    inst_lead = st.text_input("Lead Author Institution")
+    st.markdown("### Submit Your Poster")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        co1 = st.text_input("Co-Author 1")
-        inst_co1 = st.text_input("Co-Author 1 Institution")
-        co2 = st.text_input("Co-Author 2")
-        inst_co2 = st.text_input("Co-Author 2 Institution")
-    with col2:
-        co3 = st.text_input("Co-Author 3")
-        inst_co3 = st.text_input("Co-Author 3 Institution")
+    # Row 1: Lead author + contact  |  Category
+    colA, colB = st.columns([2, 1])
+    with colA:
+        st.markdown("**Lead Author**")
+        lead_author = st.text_input("Full Name*", key="lead_name")
+        contact_email = st.text_input("Contact Email*", key="lead_email")
+        inst_lead = st.text_input("Institution (Lead)", key="lead_inst")
+    with colB:
+        st.markdown("**Category**")
+        category = st.selectbox("Select*", ["Student", "Resident", "Fellow"], key="cat")
 
-    title = st.text_input("Title of Project*")
-    abstract = st.text_area("Brief Abstract* (≤ 250 words)", height=180,
-                            help="Plain text, up to ~250 words.")
-    poster_file = st.file_uploader("Upload Poster (PDF, optional)", type=["pdf"])
+    st.divider()
+
+    # Row 2: Co-authors (optional)
+    st.markdown("**Co-Authors (optional, up to 3)**")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        co1 = st.text_input("Co-Author 1", key="co1")
+        inst_co1 = st.text_input("Institution 1", key="co1i")
+    with c2:
+        co2 = st.text_input("Co-Author 2", key="co2")
+        inst_co2 = st.text_input("Institution 2", key="co2i")
+    with c3:
+        co3 = st.text_input("Co-Author 3", key="co3")
+        inst_co3 = st.text_input("Institution 3", key="co3i")
+
+    st.divider()
+
+    # Row 3: Project details
+    st.markdown("**Project**")
+    title = st.text_input("Title of Project*", key="title")
+    abstract = st.text_area(
+        "Brief Abstract* (≤ 250 words)",
+        height=180,
+        help="Plain text, up to ~250 words.",
+        key="abstract",
+    )
+
+    # Row 4: Poster file
+    st.markdown("**Poster File (optional)**")
+    poster_file = st.file_uploader("Upload PDF", type=["pdf"], key="poster_pdf")
 
     submit = st.form_submit_button("Submit Poster")
+
+# Validation + submit
+if submit:
+    required = [category, lead_author, title, abstract, contact_email]
+    if not all((x or "").strip() for x in required):
+        st.warning("Please complete all required fields marked with *.", icon="⚠️")
+    elif len(abstract.split()) > 250:
+        st.warning("Abstract appears to exceed 250 words. Please shorten.", icon="⚠️")
+    else:
+        poster_url = save_upload_to_storage(poster_file, prefix="posters") if poster_file else ""
+        payload = {
+            "category": category,
+            "lead_author": lead_author.strip(),
+            "coauthor1": (co1 or "").strip(),
+            "coauthor2": (co2 or "").strip(),
+            "coauthor3": (co3 or "").strip(),
+            "institution_lead": (inst_lead or "").strip(),
+            "institution_co1": (inst_co1 or "").strip(),
+            "institution_co2": (inst_co2 or "").strip(),
+            "institution_co3": (inst_co3 or "").strip(),
+            "title": title.strip(),
+            "abstract": abstract.strip(),
+            "poster_url": poster_url,
+            "contact_email": (contact_email or "").strip(),
+        }
+        rid = insert_poster(payload)
+        if rid:
+            st.success("Thank you! Your poster has been submitted.")
+            when = datetime.now(ZoneInfo(TIMEZONE)).strftime("%b %d, %Y %I:%M %p %Z")
+            subj = "NHCMA — Poster Submission Received"
+            link_html = f'<br><strong>Poster file:</strong> <a href="{poster_url}">View</a>' if poster_url else ""
+            html = f"""
+                <p>Dear {lead_author},</p>
+                <p>Thank you for submitting your <strong>{category}</strong> research poster to the NHCMA Foundation.</p>
+                <p>
+                    <strong>Title:</strong> {title}<br>
+                    <strong>Submitted:</strong> {when}
+                    {link_html}
+                </p>
+                <p>We will contact you if additional information is needed.<br>
+                Questions: <a href="mailto:nhcma@lutinemanagement.com">nhcma@lutinemanagement.com</a></p>
+                <p>— NHCMA Foundation</p>
+            """
+            send_email(contact_email, CC_EMAIL, subj, html)
+        else:
+            st.error("There was a problem saving your submission. Please try again or contact support.")
+
 
 if submit:
     required = [category, lead_author, title, abstract, contact_email]
@@ -226,8 +297,9 @@ if submit:
         else:
             st.error("There was a problem saving your submission. Please try again or contact support.")
 
-# ---------- Minimal Admin (read-only list + CSV) ----------
-with st.expander("Admin (read-only list)", expanded=False):
+# ---------- Admin (password-gated) ----------
+
+def admin_panel():
     client = sb_admin or sb
     try:
         res = client.table("posters").select("*").order("id", desc=True).execute()
@@ -245,22 +317,21 @@ with st.expander("Admin (read-only list)", expanded=False):
         ] if c in df.columns]
         df = df[first + [c for c in df.columns if c not in first]]
 
-    st.dataframe(
-        df,
-        use_container_width=True,
-        column_config={"poster_url": st.column_config.LinkColumn("Poster URL")},
-    )
-
-    if not df.empty:
-        csv = df.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "Download CSV (Posters)",
-            data=csv,
-            file_name="nhcma_posters.csv",
-            mime="text/csv",
+    with st.expander("Admin — Submissions & Export", expanded=True):
+        st.dataframe(
+            df,
             use_container_width=True,
+            column_config={"poster_url": st.column_config.LinkColumn("Poster URL")},
         )
-import streamlit as st
+        if not df.empty:
+            csv = df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "Download CSV (Posters)",
+                data=csv,
+                file_name="nhcma_posters.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
 
 def _admin_allowed() -> bool:
     """Password gate for Admin. Set ADMIN_PASSWORD in Streamlit secrets."""
@@ -271,13 +342,13 @@ def _admin_allowed() -> bool:
 
     # already logged in?
     if st.session_state.get("admin_ok"):
-        # logout button
-        if st.button("Logout", key="admin_logout"):
-            st.session_state.pop("admin_ok", None)
-            st.experimental_rerun()
+        c1, c2 = st.columns([1, 5])
+        with c1:
+            if st.button("Logout", key="admin_logout"):
+                st.session_state.pop("admin_ok", None)
+                st.experimental_rerun()
         return True
 
-    # login UI
     with st.form("admin_login", clear_on_submit=False):
         pw = st.text_input("Enter admin password", type="password", key="admin_pw")
         ok = st.form_submit_button("Login")
@@ -289,3 +360,9 @@ def _admin_allowed() -> bool:
         else:
             st.error("Incorrect password.")
     st.stop()
+
+# Gate + render
+st.divider()
+st.subheader("Admin")
+if _admin_allowed():
+    admin_panel()
