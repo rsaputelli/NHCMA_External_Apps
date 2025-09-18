@@ -27,6 +27,8 @@ from typing import Dict, Any, Tuple, Optional
 import streamlit as st
 import pandas as pd
 from supabase import create_client, Client
+SERVICE_ROLE_KEY = st.secrets.get("SUPABASE_SERVICE_ROLE_KEY")
+sb_admin = create_client(SUPABASE_URL, SERVICE_ROLE_KEY) if SERVICE_ROLE_KEY else None
 
 APP_TITLE = "NHCMA Foundation — 2025 Public Health Innovation Grants"
 TIMEZONE = "America/New_York"
@@ -133,9 +135,12 @@ def insert_submission(track: str, applicant_name: str, email: str, phone: str, p
     except Exception:
         st.write("whoami RPC failed")
     try:
-        res = sb.table("submissions").insert(data).execute()
+        # use service-role client if available, otherwise fall back to anon
+        client = sb_admin or sb
+        res = client.table("submissions").insert(data).execute()
         if getattr(res, "data", None):
             return res.data[0].get("id")
+
     except Exception as e:
         st.error(f"Error saving submission: {e}")
     return None
