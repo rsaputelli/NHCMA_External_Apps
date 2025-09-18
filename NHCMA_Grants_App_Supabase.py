@@ -99,8 +99,7 @@ def save_upload_to_storage(file, prefix: str) -> str:
         except Exception:
             return ""
 
-def insert_submission(track: str, applicant_name: str, email: str, phone: str,
-                      payload: Dict[str, Any], uploads: Dict[str, str]) -> Optional[int]:
+def insert_submission(track: str, applicant_name: str, email: str, phone: str, payload: Dict[str, Any], uploads: Dict[str, str]) -> Optional[int]:
     data = {
         "track": track,
         "applicant_name": (applicant_name or "").strip(),
