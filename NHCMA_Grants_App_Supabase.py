@@ -126,6 +126,12 @@ def insert_submission(track: str, applicant_name: str, email: str, phone: str, p
     # ↓↓↓ ADD THIS DEBUG LINE RIGHT BEFORE THE INSERT ↓↓↓
     st.write("DEBUG insert payload", data)
     # (Remove this after testing)
+    # TEMP: check which role Supabase sees
+    try:
+        who = sb.rpc("whoami", {}).execute()
+        st.write("DEBUG whoami", who.data)
+    except Exception:
+        st.write("whoami RPC failed")
     try:
         res = sb.table("submissions").insert(data).execute()
         if getattr(res, "data", None):
