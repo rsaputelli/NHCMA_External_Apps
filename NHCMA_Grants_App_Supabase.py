@@ -1,35 +1,7 @@
+# NHCMA Grants Streamlit App — Supabase Edition (keys-patched)
+# Adds unique widget keys per tab (org_* and stu_*) to avoid StreamlitDuplicateElementId
 
-# NHCMA Grants Streamlit App — Supabase Edition
-# - Two application tracks: Organizations & Medical Students
-# - Stores submissions in Supabase Postgres (JSONB payloads)
-# - Uploads are saved to Supabase Storage with signed URLs
-# - Admin tab to view & export CSV for scoring
-# - Enforces 2025 deadlines: Orgs (Oct 17, 2025 @ 4:59 PM ET), Students (Oct 19, 2025 @ 11:59 PM ET)
-#
-# Requirements:
-#   pip install streamlit pandas supabase
-# Environment (Streamlit Cloud -> Secrets):
-#   SUPABASE_URL
-#   SUPABASE_ANON_KEY
-#   SUPABASE_BUCKET = "nhcma-uploads"   (create in Supabase Storage)
-#
-# SQL (run in Supabase):
-#   create table if not exists public.submissions (
-#     id bigserial primary key,
-#     track text not null check (track in ('organization','student')),
-#     ts_utc timestamptz not null default now(),
-#     applicant_name text not null,
-#     email text,
-#     phone text,
-#     payload_json jsonb not null,
-#     uploads_json jsonb not null
-#   );
-#   alter table public.submissions enable row level security;
-#   -- Minimal policies for testing (tighten later):
-#   create policy read_submissions_auth on public.submissions for select to authenticated using (true);
-#   create policy insert_submissions_anon on public.submissions for insert to anon with check (true);
-
-import os, json, textwrap
+import os, json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, Tuple, Optional
@@ -38,9 +10,6 @@ import streamlit as st
 import pandas as pd
 from supabase import create_client, Client
 
-# ----------------------------
-# App Settings
-# ----------------------------
 APP_TITLE = "NHCMA Foundation — 2025 Public Health Innovation Grants"
 TIMEZONE = "America/New_York"
 
@@ -48,7 +17,7 @@ TIMEZONE = "America/New_York"
 ORG_DEADLINE = datetime(2025, 10, 17, 16, 59, tzinfo=ZoneInfo(TIMEZONE))
 STU_DEADLINE = datetime(2025, 10, 19, 23, 59, tzinfo=ZoneInfo(TIMEZONE))
 
-# Supabase
+# Supabase config
 SUPABASE_URL = os.getenv("SUPABASE_URL") or st.secrets.get("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY") or st.secrets.get("SUPABASE_ANON_KEY")
 BUCKET = os.getenv("SUPABASE_BUCKET") or st.secrets.get("SUPABASE_BUCKET", "nhcma-uploads")
@@ -56,53 +25,38 @@ BUCKET = os.getenv("SUPABASE_BUCKET") or st.secrets.get("SUPABASE_BUCKET", "nhcm
 @st.cache_resource(show_spinner=False)
 def supabase_client() -> Client:
     if not SUPABASE_URL or not SUPABASE_ANON_KEY:
-        st.stop()  # Fail fast with a helpful message
+        st.error("Missing SUPABASE_URL or SUPABASE_ANON_KEY in secrets.")
+        st.stop()
     return create_client(str(SUPABASE_URL), str(SUPABASE_ANON_KEY))
 
 sb = supabase_client()
 
-# ----------------------------
-# Utilities
-# ----------------------------
 def too_late(deadline: datetime) -> bool:
     now = datetime.now(ZoneInfo(TIMEZONE))
     return now > deadline
 
 def save_upload_to_storage(file, prefix: str) -> str:
-    """
-    Upload to Supabase Storage and return a signed URL (7 days).
-    Bucket must exist and allow 'upload' by anon or use service function.
-    """
     if file is None:
         return ""
-    # Ensure a reasonable object key
     safe_name = file.name.replace("/", "_").replace("\\", "_")
     key = f"{prefix}/{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}_{safe_name}"
-    # Upload
     try:
         sb.storage.from_(BUCKET).upload(key, file, file_options={"content-type": file.type})
     except Exception as e:
         st.warning(f"Upload failed for {safe_name}: {e}")
         return ""
-    # Signed URL
     try:
         signed = sb.storage.from_(BUCKET).create_signed_url(key, expires_in=60*60*24*7)
-        # The python client returns a dict; handle both shapes
         if isinstance(signed, dict):
             return signed.get("signedURL") or signed.get("signed_url") or ""
         return str(signed)
     except Exception as e:
         st.warning(f"Could not create signed URL for {safe_name}: {e}")
-        # Fallback to public URL if bucket is public
         try:
-            public_url = sb.storage.from_(BUCKET).get_public_url(key)
-            return public_url
+            return sb.storage.from_(BUCKET).get_public_url(key)
         except Exception:
             return ""
 
-# ----------------------------
-# DB helpers (Supabase)
-# ----------------------------
 def insert_submission(track: str, applicant_name: str, email: str, phone: str, payload: Dict[str, Any], uploads: Dict[str, str]) -> Optional[int]:
     data = {
         "track": track,
@@ -129,71 +83,65 @@ def load_submissions_df() -> pd.DataFrame:
         rows = []
     df = pd.DataFrame(rows)
     if not df.empty:
-        # Expand some common payload keys for quick view
-        def g(p, key, default=""):
-            try:
-                return (p or {}).get(key, default)
-            except Exception:
-                return default
         flat = []
         for p in df.get("payload_json", []):
+            p = p or {}
             flat.append({
-                "Org Name": g(p, "org_name"),
-                "Project Title": g(p, "project_title"),
-                "School": g(p, "school"),
-                "Advisor Name": g(p, "advisor_name"),
-                "Budget Total": g(p, "budget_total"),
+                "Org Name": p.get("org_name",""),
+                "Project Title": p.get("project_title",""),
+                "School": p.get("school",""),
+                "Advisor Name": p.get("advisor_name",""),
+                "Budget Total": p.get("budget_total",""),
             })
-        flat_df = pd.DataFrame(flat)
-        df = pd.concat([df, flat_df], axis=1)
+        df = pd.concat([df, pd.DataFrame(flat)], axis=1)
     return df
 
 # ----------------------------
-# Forms
+# Forms with unique keys
 # ----------------------------
 def org_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]:
-    st.subheader("Organization Application (2025)")
+    st.subheader("Organization Application (2025)", anchor="org")
     st.caption("Submission deadline: **October 17, 2025 at 4:59 PM ET**")
 
     disabled = too_late(ORG_DEADLINE)
     if disabled:
         st.error("The organization submission deadline has passed.")
-    
-    org_name = st.text_input("Name of Organization*", disabled=disabled)
-    applicant_name = st.text_input("Name of Applicant (First/Last)*", disabled=disabled)
-    email = st.text_input("Applicant Email*", disabled=disabled)
-    phone = st.text_input("Applicant Phone*", disabled=disabled)
 
-    exec_dir = st.text_input("Executive Director (First/Last)", disabled=disabled)
-    exec_email = st.text_input("Executive Director Email", disabled=disabled)
-    exec_phone = st.text_input("Executive Director Phone", disabled=disabled)
+    org_name = st.text_input("Name of Organization*", key="org_org_name", disabled=disabled)
+    applicant_name = st.text_input("Name of Applicant (First/Last)*", key="org_applicant_name", disabled=disabled)
+    email = st.text_input("Applicant Email*", key="org_email", disabled=disabled)
+    phone = st.text_input("Applicant Phone*", key="org_phone", disabled=disabled)
 
-    mission = st.text_area("Organization Mission (brief)", disabled=disabled)
+    exec_dir = st.text_input("Executive Director (First/Last)", key="org_exec_dir", disabled=disabled)
+    exec_email = st.text_input("Executive Director Email", key="org_exec_email", disabled=disabled)
+    exec_phone = st.text_input("Executive Director Phone", key="org_exec_phone", disabled=disabled)
+
+    mission = st.text_area("Organization Mission (brief)", key="org_mission", disabled=disabled)
 
     st.markdown("**Eligibility (must confirm all):**")
-    eligible_nonprofit = st.checkbox("Organization is a not-for-profit.", disabled=disabled)
-    eligible_report = st.checkbox("Recipient will present final report at the NHCMA winter meeting in 2025 (date TBA).", disabled=disabled)
-    eligible_benefit = st.checkbox("Funding will benefit residents of the Greater New Haven area.", disabled=disabled)
+    eligible_nonprofit = st.checkbox("Organization is a not-for-profit.", key="org_elig_np", disabled=disabled)
+    eligible_report = st.checkbox("Recipient will present final report at the NHCMA winter meeting in 2025 (date TBA).", key="org_elig_report", disabled=disabled)
+    eligible_benefit = st.checkbox("Funding will benefit residents of the Greater New Haven area.", key="org_elig_benefit", disabled=disabled)
 
     st.markdown("**Introduction & Purpose (≈250 words each):**")
-    q1 = st.text_area("1) Public health issue addressed in Greater New Haven", disabled=disabled)
-    q2 = st.text_area("2) Alignment with NHCMA Foundation mission", disabled=disabled)
-    q3 = st.text_area("3) Direct benefit to Greater New Haven residents", disabled=disabled)
+    q1 = st.text_area("1) Public health issue addressed in Greater New Haven", key="org_q1", disabled=disabled)
+    q2 = st.text_area("2) Alignment with NHCMA Foundation mission", key="org_q2", disabled=disabled)
+    q3 = st.text_area("3) Direct benefit to Greater New Haven residents", key="org_q3", disabled=disabled)
 
     st.markdown("**Proposal Guidelines:**")
-    project_title = st.text_input("Project Title*", disabled=disabled)
-    desc = st.text_area("4) Detailed project description (objectives, methodology, expected outcomes)", disabled=disabled)
-    budget = st.text_area("5) Itemized budget (include any outside funding)", disabled=disabled)
-    budget_total = st.text_input("Budget total (USD)", disabled=disabled)
-    timeline = st.text_area("6) Project timeline (goal within 1 year of disbursement)", disabled=disabled)
-    evaluation = st.text_area("7) Evaluation plan (impact/outcomes in Greater New Haven)", disabled=disabled)
+    project_title = st.text_input("Project Title*", key="org_project_title", disabled=disabled)
+    desc = st.text_area("4) Detailed project description (objectives, methodology, expected outcomes)", key="org_desc", disabled=disabled)
+    budget = st.text_area("5) Itemized budget (include any outside funding)", key="org_budget_text", disabled=disabled)
+    budget_total = st.text_input("Budget total (USD)", key="org_budget_total", disabled=disabled)
+    timeline = st.text_area("6) Project timeline (goal within 1 year of disbursement)", key="org_timeline", disabled=disabled)
+    evaluation = st.text_area("7) Evaluation plan (impact/outcomes in Greater New Haven)", key="org_evaluation", disabled=disabled)
 
     st.markdown("**Attachments (PDF preferred):**")
-    proposal_pdf = st.file_uploader("Upload Proposal / Narrative", type=["pdf","doc","docx"], disabled=disabled)
-    budget_file  = st.file_uploader("Upload Budget", type=["pdf","xls","xlsx","csv"], disabled=disabled)
-    other_file   = st.file_uploader("Optional: Additional Materials (letter(s) of support, etc.)", type=["pdf","doc","docx","zip"], disabled=disabled)
+    proposal_pdf = st.file_uploader("Upload Proposal / Narrative", type=["pdf","doc","docx"], key="org_proposal", disabled=disabled)
+    budget_file  = st.file_uploader("Upload Budget", type=["pdf","xls","xlsx","csv"], key="org_budget_file", disabled=disabled)
+    other_file   = st.file_uploader("Optional: Additional Materials (letter(s) of support, etc.)", type=["pdf","doc","docx","zip"], key="org_other_file", disabled=disabled)
 
-    submitted = st.button("Submit Organization Application", type="primary", disabled=disabled)
+    submitted = st.button("Submit Organization Application", type="primary", key="org_submit", disabled=disabled)
 
     payload = {
         "org_name": org_name,
@@ -222,13 +170,12 @@ def org_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]:
 
     uploads = {}
     if submitted:
-        # basic validations
         required = [org_name, applicant_name, email, project_title]
         if not all(x and str(x).strip() for x in required):
-            st.warning("Please complete all required fields marked with * before submitting.")
+            st.warning("Please complete all required fields marked with * before submitting.", icon="⚠️")
             submitted = False
         elif not all([eligible_nonprofit, eligible_report, eligible_benefit]):
-            st.warning("Please confirm all eligibility checkboxes.")
+            st.warning("Please confirm all eligibility checkboxes.", icon="⚠️")
             submitted = False
         else:
             uploads["proposal"] = save_upload_to_storage(proposal_pdf, "org_proposal")
@@ -238,52 +185,53 @@ def org_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]:
     return submitted, payload, uploads, applicant_name, email, (phone or "")
 
 def student_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]:
-    st.subheader("Medical Student Application (2025)")
+    st.subheader("Medical Student Application (2025)", anchor="stu")
     st.caption("Submission deadline: **October 19, 2025 at 11:59 PM ET**")
 
     disabled = too_late(STU_DEADLINE)
     if disabled:
         st.error("The student submission deadline has passed.")
 
-    applicant_name = st.text_input("Applicant Name (First/Last)*", disabled=disabled)
+    applicant_name = st.text_input("Applicant Name (First/Last)*", key="stu_applicant_name", disabled=disabled)
     school = st.selectbox(
         "Medical School*",
         ["", "Frank H. Netter MD School of Medicine at Quinnipiac University", "Yale School of Medicine"],
         index=0,
+        key="stu_school",
         disabled=disabled
     )
-    grad_date = st.text_input("Projected Graduation Date (MM/YYYY)", disabled=disabled)
-    email = st.text_input("School Email*", disabled=disabled)
-    phone = st.text_input("Phone*", disabled=disabled)
+    grad_date = st.text_input("Projected Graduation Date (MM/YYYY)", key="stu_grad_date", disabled=disabled)
+    email = st.text_input("School Email*", key="stu_email", disabled=disabled)
+    phone = st.text_input("Phone*", key="stu_phone", disabled=disabled)
 
-    advisor_name = st.text_input("Advisor Name", disabled=disabled)
-    advisor_title = st.text_input("Advisor Title/Role", disabled=disabled)
-    advisor_email = st.text_input("Advisor Email", disabled=disabled)
+    advisor_name = st.text_input("Advisor Name", key="stu_advisor_name", disabled=disabled)
+    advisor_title = st.text_input("Advisor Title/Role", key="stu_advisor_title", disabled=disabled)
+    advisor_email = st.text_input("Advisor Email", key="stu_advisor_email", disabled=disabled)
 
     st.markdown("**Eligibility (must confirm all):**")
-    elig_enrolled = st.checkbox("I am currently enrolled at Quinnipiac (Netter) or Yale SOM.", disabled=disabled)
-    elig_report = st.checkbox("If awarded, I will present results at the NHCMA winter meeting in 2025 (date TBA).", disabled=disabled)
+    elig_enrolled = st.checkbox("I am currently enrolled at Quinnipiac (Netter) or Yale SOM.", key="stu_elig_enrolled", disabled=disabled)
+    elig_report = st.checkbox("If awarded, I will present results at the NHCMA winter meeting in 2025 (date TBA).", key="stu_elig_report", disabled=disabled)
 
     st.markdown("**Introduction & Purpose (≈250 words each):**")
-    q1 = st.text_area("1) Public health issue addressed in Greater New Haven", disabled=disabled)
-    q2 = st.text_area("2) Alignment with NHCMA Foundation mission", disabled=disabled)
-    q3 = st.text_area("3) Direct benefit to Greater New Haven residents", disabled=disabled)
+    q1 = st.text_area("1) Public health issue addressed in Greater New Haven", key="stu_q1", disabled=disabled)
+    q2 = st.text_area("2) Alignment with NHCMA Foundation mission", key="stu_q2", disabled=disabled)
+    q3 = st.text_area("3) Direct benefit to Greater New Haven residents", key="stu_q3", disabled=disabled)
 
     st.markdown("**Proposal Guidelines:**")
-    project_title = st.text_input("Project Title*", disabled=disabled)
-    desc = st.text_area("4) Detailed project/research description (objectives, methodology, expected outcomes)", disabled=disabled)
-    budget = st.text_area("5) Itemized budget (include any outside funding)", disabled=disabled)
-    budget_total = st.text_input("Budget total (USD)", disabled=disabled)
-    timeline = st.text_area("6) Timeline (goal within 1 year of disbursement)", disabled=disabled)
-    evaluation = st.text_area("7) Evaluation plan (impact on public health in Greater New Haven)", disabled=disabled)
+    project_title = st.text_input("Project Title*", key="stu_project_title", disabled=disabled)
+    desc = st.text_area("4) Detailed project/research description (objectives, methodology, expected outcomes)", key="stu_desc", disabled=disabled)
+    budget = st.text_area("5) Itemized budget (include any outside funding)", key="stu_budget_text", disabled=disabled)
+    budget_total = st.text_input("Budget total (USD)", key="stu_budget_total", disabled=disabled)
+    timeline = st.text_area("6) Timeline (goal within 1 year of disbursement)", key="stu_timeline", disabled=disabled)
+    evaluation = st.text_area("7) Evaluation plan (impact on public health in Greater New Haven)", key="stu_evaluation", disabled=disabled)
 
     st.markdown("**Attachments (PDF preferred):**")
-    proposal_pdf = st.file_uploader("Upload Proposal / Narrative", type=["pdf","doc","docx"], disabled=disabled)
-    budget_file  = st.file_uploader("Upload Budget", type=["pdf","xls","xlsx","csv"], disabled=disabled)
-    cv_file      = st.file_uploader("Curriculum Vitae (PDF preferred)", type=["pdf","doc","docx"], disabled=disabled)
-    support_let  = st.file_uploader("Letter of Support (optional)", type=["pdf","doc","docx"], disabled=disabled)
+    proposal_pdf = st.file_uploader("Upload Proposal / Narrative", type=["pdf","doc","docx"], key="stu_proposal", disabled=disabled)
+    budget_file  = st.file_uploader("Upload Budget", type=["pdf","xls","xlsx","csv"], key="stu_budget_file", disabled=disabled)
+    cv_file      = st.file_uploader("Curriculum Vitae (PDF preferred)", type=["pdf","doc","docx"], key="stu_cv_file", disabled=disabled)
+    support_let  = st.file_uploader("Letter of Support (optional)", type=["pdf","doc","docx"], key="stu_support_letter", disabled=disabled)
 
-    submitted = st.button("Submit Student Application", type="primary", disabled=disabled)
+    submitted = st.button("Submit Student Application", type="primary", key="stu_submit", disabled=disabled)
 
     payload = {
         "applicant_name": applicant_name,
@@ -313,10 +261,10 @@ def student_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]
     if submitted:
         required = [applicant_name, school, email, phone, project_title]
         if not all(x and str(x).strip() for x in required):
-            st.warning("Please complete all required fields marked with * before submitting.")
+            st.warning("Please complete all required fields marked with * before submitting.", icon="⚠️")
             submitted = False
         elif not all([elig_enrolled, elig_report]):
-            st.warning("Please confirm all eligibility checkboxes.")
+            st.warning("Please confirm all eligibility checkboxes.", icon="⚠️")
             submitted = False
         else:
             uploads["proposal"] = save_upload_to_storage(proposal_pdf, "stu_proposal")
@@ -337,28 +285,16 @@ def admin_panel():
         return
 
     st.dataframe(df, use_container_width=True)
-    # Simple CSV export
     csv = df.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "Download CSV (All Submissions)",
-        data=csv,
-        file_name="nhcma_grants_submissions.csv",
-        mime="text/csv"
-    )
+    st.download_button("Download CSV (All Submissions)", data=csv, file_name="nhcma_grants_submissions.csv", mime="text/csv", key="admin_dl_all")
 
-    # Scoring export (lite view)
     scoring_cols = ["id","track","ts_utc","applicant_name","email","phone","Org Name","School","Project Title","Budget Total"]
     export_df = df[[c for c in scoring_cols if c in df.columns]].copy()
     st.divider()
     st.caption("Scoring Export — key columns only")
     st.dataframe(export_df, use_container_width=True)
     csv2 = export_df.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "Download CSV (Scoring Export)",
-        data=csv2,
-        file_name="nhcma_grants_scoring_export.csv",
-        mime="text/csv"
-    )
+    st.download_button("Download CSV (Scoring Export)", data=csv2, file_name="nhcma_grants_scoring_export.csv", mime="text/csv", key="admin_dl_scoring")
 
 # ----------------------------
 # Main
@@ -393,3 +329,4 @@ with tab3:
     admin_panel()
 
 st.caption("© 2025 New Haven County Medical Association Foundation")
+
