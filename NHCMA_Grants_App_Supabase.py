@@ -3,7 +3,11 @@ from email.message import EmailMessage
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, Tuple, Optional
+
 import io
+import streamlit as st
+import pandas as pd
+from supabase import create_client, Client
 
 def make_excel(df: pd.DataFrame) -> bytes:
     """Return an .xlsx bytes blob for Streamlit download_button."""
@@ -12,10 +16,6 @@ def make_excel(df: pd.DataFrame) -> bytes:
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
             df.to_excel(writer, index=False, sheet_name="Submissions")
         return output.getvalue()
-
-import streamlit as st
-import pandas as pd
-from supabase import create_client, Client
 
 APP_TITLE = "NHCMA Foundation — 2025 Public Health Innovation Grants"
 TIMEZONE = "America/New_York"
