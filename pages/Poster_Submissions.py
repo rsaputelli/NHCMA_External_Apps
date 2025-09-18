@@ -11,33 +11,46 @@ from email.message import EmailMessage
 from datetime import datetime
 from typing import Dict, Any, Optional
 from zoneinfo import ZoneInfo
+from pathlib import Path
 
 import streamlit as st
 import pandas as pd
 from supabase import create_client
 
-# -------- App meta --------
+# ---------- App meta / page config ----------
+APP_TITLE = "NHCMA — Research Poster Presentations"
 TIMEZONE = "America/New_York"
 POSTERS_BUCKET = "nhcma-posters"
-APP_TITLE = "NHCMA — Research Poster Presentations"
 
 st.set_page_config(page_title=APP_TITLE, page_icon="🧪", layout="wide")
-st.title(APP_TITLE)
-st.caption("Collection form for Student, Resident, and Fellow research posters (no judging).")
 
-# -------- Secrets / clients (reuse same as Grants app) --------
-_sb = st.secrets.get("supabase", {})
-SUPABASE_URL = os.getenv("SUPABASE_URL") or st.secrets.get("SUPABASE_URL") or _sb.get("url")
-SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY") or st.secrets.get("SUPABASE_ANON_KEY") or _sb.get("anon_key")
+# ---------- Secrets / Supabase config ----------
+_sb = st.secrets.get("supabase", {})  # supports nested [supabase] too
+SUPABASE_URL = (
+    os.getenv("SUPABASE_URL")
+    or st.secrets.get("SUPABASE_URL")
+    or _sb.get("url")
+)
+SUPABASE_ANON_KEY = (
+    os.getenv("SUPABASE_ANON_KEY")
+    or st.secrets.get("SUPABASE_ANON_KEY")
+    or _sb.get("anon_key")
+)
 
-# anon client
+# Guard: fail early with a friendly message if secrets are missing
+if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+    st.error(
+        "Supabase configuration is missing. Please set **SUPABASE_URL** and **SUPABASE_ANON_KEY** "
+        "in Streamlit Secrets (flat or under `[supabase]`)."
+    )
+    st.stop()
+
+# Create clients
 sb = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
-
-# optional service-role client (admin & robust inserts)
 SERVICE_ROLE_KEY = st.secrets.get("SUPABASE_SERVICE_ROLE_KEY")
 sb_admin = create_client(SUPABASE_URL, SERVICE_ROLE_KEY) if SERVICE_ROLE_KEY else None
 
-# SMTP config (supports flat keys or [smtp] section — mirrors Grants app)
+# ---------- SMTP config (reuse grants secrets) ----------
 _smtp = st.secrets.get("smtp", {})
 SMTP_HOST = os.getenv("SMTP_HOST") or st.secrets.get("SMTP_HOST") or _smtp.get("host", "smtp.office365.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT") or st.secrets.get("SMTP_PORT") or _smtp.get("port", 587))
@@ -47,7 +60,31 @@ SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL") or st.secrets.get("SMTP_FROM_EMAI
 SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME") or st.secrets.get("SMTP_FROM_NAME") or _smtp.get("from_name", "NHCMA Foundation")
 CC_EMAIL = "nhcma@lutinemanagement.com"
 
-# -------- Helpers --------
+# ---------- Header with logo ----------
+def render_header():
+    logo_path = None
+    for p in ("assets/logo.jpg", "logo.jpg"):
+        if Path(p).exists():
+            logo_path = p
+            break
+
+    left, right = st.columns([1, 3], vertical_alignment="center")
+    with left:
+        if logo_path:
+            st.image(logo_path, use_container_width=True)
+        else:
+            st.write("")  # spacer
+    with right:
+        st.title(APP_TITLE)
+        st.markdown(
+            "Please have your information ready before beginning. "
+            "Questions: **nhcma@lutinemanagement.com**."
+        )
+
+render_header()
+st.caption("Collection form for Student, Resident, and Fellow research posters (no judging).")
+
+# ---------- Helpers ----------
 def send_email(to_email: str, cc_email: Optional[str], subject: str, html_body: str) -> bool:
     """Send email via Office365 SMTP using secrets. Returns True on success."""
     if not (SMTP_USER and SMTP_PASSWORD and SMTP_FROM_EMAIL):
@@ -119,7 +156,7 @@ def insert_poster(payload: Dict[str, Any]) -> Optional[int]:
         st.error(f"Error saving poster: {e}")
     return None
 
-# -------- Form --------
+# ---------- Form ----------
 with st.form("poster_form", clear_on_submit=True):
     category = st.selectbox("Category*", ["Student", "Resident", "Fellow"])
     lead_author = st.text_input("Lead Author*")
@@ -189,7 +226,7 @@ if submit:
         else:
             st.error("There was a problem saving your submission. Please try again or contact support.")
 
-# -------- Minimal Admin (read-only list + CSV) --------
+# ---------- Minimal Admin (read-only list + CSV) ----------
 with st.expander("Admin (read-only list)", expanded=False):
     client = sb_admin or sb
     try:
@@ -211,9 +248,7 @@ with st.expander("Admin (read-only list)", expanded=False):
     st.dataframe(
         df,
         use_container_width=True,
-        column_config={
-            "poster_url": st.column_config.LinkColumn("Poster URL"),
-        },
+        column_config={"poster_url": st.column_config.LinkColumn("Poster URL")},
     )
 
     if not df.empty:
