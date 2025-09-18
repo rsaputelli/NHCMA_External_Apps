@@ -123,6 +123,9 @@ def insert_submission(track: str, applicant_name: str, email: str, phone: str, p
         "payload_json": payload,
         "uploads_json": uploads,
     }
+    # ↓↓↓ ADD THIS DEBUG LINE RIGHT BEFORE THE INSERT ↓↓↓
+    st.write("DEBUG insert payload", data)
+    # (Remove this after testing)
     try:
         res = sb.table("submissions").insert(data).execute()
         if getattr(res, "data", None):
