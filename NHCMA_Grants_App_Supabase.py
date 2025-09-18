@@ -455,11 +455,16 @@ with tab2:
 
 with tab3:
     if _admin_allowed():
-        # Show a logout button once admin is unlocked
+        # Show logout only once unlocked
         if st.session_state.get("admin_ok"):
             if st.button("Log out", key="admin_logout"):
-                st.session_state["admin_ok"] = False
-                st.experimental_rerun()
+                st.session_state.pop("admin_ok", None)
+                # Use the non-experimental API on modern Streamlit
+                try:
+                    st.rerun()
+                except Exception:
+                    # Fallback if you're on an older version
+                    st.experimental_rerun()
         admin_panel()
     else:
         st.stop()
