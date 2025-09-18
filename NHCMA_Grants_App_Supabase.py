@@ -72,11 +72,34 @@ def save_upload_to_storage(file, prefix: str) -> str:
         return ""
     safe_name = file.name.replace("/", "_").replace("\\", "_")
     key = f"{prefix}/{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}_{safe_name}"
+
+    # Read bytes from Streamlit UploadedFile
     try:
-        sb.storage.from_(BUCKET).upload(key, file, file_options={"content-type": file.type})
+        file_bytes = file.getvalue()          # bytes, not UploadedFile
+    except Exception:
+        try:
+            file_bytes = file.read()          # fallback
+        except Exception:
+            file_bytes = None
+    if not file_bytes:
+        st.warning(f"Upload failed for {safe_name}: could not read file bytes")
+        return ""
+
+    # Upload BYTES to Supabase Storage
+    try:
+        sb.storage.from_(BUCKET).upload(
+            key,
+            file_bytes,
+            file_options={
+                "content-type": getattr(file, "type", None) or "application/octet-stream",
+                "upsert": True,
+            },
+        )
     except Exception as e:
         st.warning(f"Upload failed for {safe_name}: {e}")
         return ""
+
+    # Signed URL (fallback to public URL)
     try:
         signed = sb.storage.from_(BUCKET).create_signed_url(key, expires_in=60*60*24*7)
         if isinstance(signed, dict):
@@ -500,3 +523,4 @@ with tab3:
         st.stop()
 
 st.caption("© 2025 New Haven County Medical Association Foundation")
+
