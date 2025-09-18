@@ -85,21 +85,22 @@ def save_upload_to_storage(file, prefix: str) -> str:
         st.warning(f"Upload failed for {safe_name}: could not read file bytes")
         return ""
 
+    # Build file_options with **string** header values
+    content_type = getattr(file, "type", None) or "application/octet-stream"
+    file_options = {
+        "content-type": str(content_type),  # must be str
+        "upsert": "true",                   # must be str; bool causes header error
+        # "cache-control": "3600",          # optional, must be str if you add it
+    }
+
     # Upload BYTES to Supabase Storage
     try:
-        sb.storage.from_(BUCKET).upload(
-            key,
-            file_bytes,
-            file_options={
-                "content-type": getattr(file, "type", None) or "application/octet-stream",
-                "upsert": True,
-            },
-        )
+        sb.storage.from_(BUCKET).upload(key, file_bytes, file_options=file_options)
     except Exception as e:
         st.warning(f"Upload failed for {safe_name}: {e}")
         return ""
 
-    # Signed URL (fallback to public URL)
+    # Return a signed URL (fallback to public URL)
     try:
         signed = sb.storage.from_(BUCKET).create_signed_url(key, expires_in=60*60*24*7)
         if isinstance(signed, dict):
@@ -111,6 +112,7 @@ def save_upload_to_storage(file, prefix: str) -> str:
             return sb.storage.from_(BUCKET).get_public_url(key)
         except Exception:
             return ""
+
 
 def insert_submission(track: str, applicant_name: str, email: str, phone: str, payload: Dict[str, Any], uploads: Dict[str, str]) -> Optional[int]:
     data = {
