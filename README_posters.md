@@ -56,10 +56,9 @@ Insert allowed for anon (open submission)
 Read allowed for service_role (used in admin panel)
 
 Streamlit Secrets
+
 Example secrets.toml:
 
-toml
-Copy code
 SUPABASE_URL = "https://<yourref>.supabase.co"
 SUPABASE_ANON_KEY = "<anon>"
 SUPABASE_SERVICE_ROLE_KEY = "<service role>"
@@ -74,7 +73,9 @@ from_addr = "ray@lutinemanagement.com"
 from_name = "NHCMA Foundation"
 
 ADMIN_PASSWORD = "********"
+
 Admin Panel
+
 Protected by ADMIN_PASSWORD in secrets
 
 Login required to view submissions
@@ -82,6 +83,7 @@ Login required to view submissions
 Exports available as CSV (clickable links preserved)
 
 Deployment
+
 Repo: NHCMA_External_Apps
 
 Main file: NHCMA_Posters_App.py (root level, not inside pages/)
@@ -91,6 +93,7 @@ Streamlit Cloud: separate app from Grants
 Requirements: streamlit, supabase-py, pandas, openpyxl
 
 Notes
+
 Abstract length is validated (≤250 words)
 
 Duplicate submissions prevented with session token check
