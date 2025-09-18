@@ -346,6 +346,34 @@ def student_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]
 
     return submitted, payload, uploads, applicant_name, email, phone
 
+
+# ----------------------------
+# Admin access control
+# ----------------------------
+def _admin_allowed() -> bool:
+    # Use a shared admin password from secrets (recommended) or env var
+    ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD") or st.secrets.get("ADMIN_PASSWORD")
+    if not ADMIN_PASSWORD:
+        st.warning("Admin password is not configured. Set ADMIN_PASSWORD in Streamlit secrets.", icon="🔐")
+        return False
+
+    if "admin_ok" in st.session_state and st.session_state.get("admin_ok") is True:
+        return True
+
+    with st.form("admin_login_form", clear_on_submit=False):
+        st.subheader("Admin Sign‑in", anchor="admin-login")
+        pwd = st.text_input("Enter admin password", type="password", key="admin_pwd")
+        ok = st.form_submit_button("Unlock Admin", use_container_width=False)
+    if ok:
+        if pwd == ADMIN_PASSWORD:
+            st.session_state["admin_ok"] = True
+            st.success("Admin unlocked.", icon="✅")
+            return True
+        else:
+            st.error("Incorrect password.", icon="❌")
+            return False
+    return False
+
 # ----------------------------
 # Admin
 # ----------------------------
@@ -426,6 +454,9 @@ with tab2:
             st.error("There was a problem saving your submission. Please try again or contact support.")
 
 with tab3:
-    admin_panel()
+    if _admin_allowed():
+        admin_panel()
+    else:
+        st.stop()
 
 st.caption("© 2025 New Haven County Medical Association Foundation")
