@@ -318,7 +318,8 @@ def _admin_allowed() -> bool:
         with c1:
             if st.button("Logout", key="admin_logout"):
                 st.session_state.pop("admin_ok", None)
-                st.experimental_rerun()
+                st.rerun()
+
         return True
 
     with st.form("admin_login", clear_on_submit=False):
@@ -328,7 +329,7 @@ def _admin_allowed() -> bool:
         if (pw or "").strip() == str(PW):
             st.session_state["admin_ok"] = True
             st.success("Welcome, admin.")
-            st.experimental_rerun()
+            st.rerun()
         else:
             st.error("Incorrect password.")
     st.stop()
