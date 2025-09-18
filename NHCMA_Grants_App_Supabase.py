@@ -3,6 +3,15 @@ from email.message import EmailMessage
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, Tuple, Optional
+import io
+
+def make_excel(df: pd.DataFrame) -> bytes:
+    """Return an .xlsx bytes blob for Streamlit download_button."""
+    # Excel auto-detects http(s) strings as clickable links
+    with io.BytesIO() as output:
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False, sheet_name="Submissions")
+        return output.getvalue()
 
 import streamlit as st
 import pandas as pd
@@ -456,7 +465,7 @@ def admin_panel():
         st.info("No submissions yet.")
         return
 
-    # Clickable links in the in-app table
+    # In-app table with clickable links
     st.dataframe(
         df,
         use_container_width=True,
@@ -467,17 +476,33 @@ def admin_panel():
         },
     )
 
-    # Full CSV export
-    csv = df.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "Download CSV (All Submissions)",
-        data=csv,
-        file_name="nhcma_grants_submissions.csv",
-        mime="text/csv",
-        key="admin_dl_all",
-    )
+    # --- Full export (CSV + XLSX) ---
+    st.markdown("**Full Export**")
+    full_csv = df.to_csv(index=False).encode("utf-8")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.download_button(
+            "Download CSV (All Submissions)",
+            data=full_csv,
+            file_name="nhcma_grants_submissions.csv",
+            mime="text/csv",
+            key="admin_dl_all_csv",
+            use_container_width=True,
+        )
+    with col2:
+        full_xlsx = make_excel(df)
+        st.download_button(
+            "Download Excel (All Submissions)",
+            data=full_xlsx,
+            file_name="nhcma_grants_submissions.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="admin_dl_all_xlsx",
+            use_container_width=True,
+        )
 
-    # Scoring export (include URLs)
+    # --- Scoring export (add URL columns) ---
+    st.divider()
+    st.caption("Scoring Export — key columns only")
     scoring_cols = [
         "id","track","ts_utc","applicant_name","email","phone",
         "Org Name","School","Project Title","Budget Total",
@@ -485,8 +510,6 @@ def admin_panel():
     ]
     export_df = df[[c for c in scoring_cols if c in df.columns]].copy()
 
-    st.divider()
-    st.caption("Scoring Export — key columns only")
     st.dataframe(
         export_df,
         use_container_width=True,
@@ -496,15 +519,28 @@ def admin_panel():
             "Other URL":    st.column_config.LinkColumn("Other URL"),
         },
     )
-    csv2 = export_df.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "Download CSV (Scoring Export)",
-        data=csv2,
-        file_name="nhcma_grants_scoring_export.csv",
-        mime="text/csv",
-        key="admin_dl_scoring",
-    )
 
+    col3, col4 = st.columns(2)
+    with col3:
+        scoring_csv = export_df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "Download CSV (Scoring Export)",
+            data=scoring_csv,
+            file_name="nhcma_grants_scoring_export.csv",
+            mime="text/csv",
+            key="admin_dl_scoring_csv",
+            use_container_width=True,
+        )
+    with col4:
+        scoring_xlsx = make_excel(export_df)
+        st.download_button(
+            "Download Excel (Scoring Export)",
+            data=scoring_xlsx,
+            file_name="nhcma_grants_scoring_export.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="admin_dl_scoring_xlsx",
+            use_container_width=True,
+        )
 
 # ----------------------------
 # Header / Main
