@@ -260,3 +260,32 @@ with st.expander("Admin (read-only list)", expanded=False):
             mime="text/csv",
             use_container_width=True,
         )
+import streamlit as st
+
+def _admin_allowed() -> bool:
+    """Password gate for Admin. Set ADMIN_PASSWORD in Streamlit secrets."""
+    PW = st.secrets.get("ADMIN_PASSWORD")
+    if not PW:
+        st.error("ADMIN_PASSWORD is not set in secrets.")
+        return False
+
+    # already logged in?
+    if st.session_state.get("admin_ok"):
+        # logout button
+        if st.button("Logout", key="admin_logout"):
+            st.session_state.pop("admin_ok", None)
+            st.experimental_rerun()
+        return True
+
+    # login UI
+    with st.form("admin_login", clear_on_submit=False):
+        pw = st.text_input("Enter admin password", type="password", key="admin_pw")
+        ok = st.form_submit_button("Login")
+    if ok:
+        if (pw or "").strip() == str(PW):
+            st.session_state["admin_ok"] = True
+            st.success("Welcome, admin.")
+            st.experimental_rerun()
+        else:
+            st.error("Incorrect password.")
+    st.stop()
