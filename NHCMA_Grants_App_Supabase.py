@@ -46,6 +46,7 @@ SMTP_USER = os.getenv("SMTP_USER") or st.secrets.get("SMTP_USER") or _smtp.get("
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD") or st.secrets.get("SMTP_PASSWORD") or _smtp.get("password")
 SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL") or st.secrets.get("SMTP_FROM_EMAIL") or _smtp.get("from_addr") or SMTP_USER
 SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME") or st.secrets.get("SMTP_FROM_NAME") or _smtp.get("from_name", "NHCMA Foundation Grants")
+CC_EMAIL = "nhcma@lutinemanagement.com"
 
 
 def too_late(deadline: datetime) -> bool:
@@ -98,8 +99,8 @@ def save_upload_to_storage(file, prefix: str) -> str:
         except Exception:
             return ""
 
-
-def insert_submission(track: str, applicant_name: str, email: str, phone: str, payload: Dict[str, Any], uploads: Dict[str, str]) -> Optional[int]:
+def insert_submission(track: str, applicant_name: str, email: str, phone: str,
+                      payload: Dict[str, Any], uploads: Dict[str, str]) -> Optional[int]:
     data = {
         "track": track,
         "applicant_name": (applicant_name or "").strip(),
@@ -108,29 +109,23 @@ def insert_submission(track: str, applicant_name: str, email: str, phone: str, p
         "payload_json": payload,
         "uploads_json": uploads,
     }
-    # ↓↓↓ ADD THIS DEBUG LINE RIGHT BEFORE THE INSERT ↓↓↓
-    st.write("DEBUG insert payload", data)
-    # (Remove this after testing)
-    # TEMP: check which role Supabase sees
-    try:
-        who = sb.rpc("whoami", {}).execute()
-        st.write("DEBUG whoami", who.data)
-    except Exception:
-        st.write("whoami RPC failed")
+
     try:
         # use service-role client if available, otherwise fall back to anon
         client = sb_admin or sb
         res = client.table("submissions").insert(data).execute()
         if getattr(res, "data", None):
             return res.data[0].get("id")
-
     except Exception as e:
         st.error(f"Error saving submission: {e}")
     return None
 
+
 def load_submissions_df() -> pd.DataFrame:
     try:
-        res = sb.table("submissions").select("*").order("id", desc=True).execute()
+        # use service-role client if available (bypasses RLS), else fall back to anon
+        client = sb_admin or sb
+        res = client.table("submissions").select("*").order("id", desc=True).execute()
         rows = res.data or []
     except Exception as e:
         st.error(f"Error loading submissions: {e}")
@@ -141,11 +136,11 @@ def load_submissions_df() -> pd.DataFrame:
         for p in df.get("payload_json", []):
             p = p or {}
             flat.append({
-                "Org Name": p.get("org_name",""),
-                "Project Title": p.get("project_title",""),
-                "School": p.get("school",""),
-                "Advisor Name": p.get("advisor_name",""),
-                "Budget Total": p.get("budget_total",""),
+                "Org Name": p.get("org_name", ""),
+                "Project Title": p.get("project_title", ""),
+                "School": p.get("school", ""),
+                "Advisor Name": p.get("advisor_name", ""),
+                "Budget Total": p.get("budget_total", ""),
             })
         df = pd.concat([df, pd.DataFrame(flat)], axis=1)
     return df
@@ -498,7 +493,7 @@ with tab1:
             # Send confirmation email
             subject = "NHCMA Foundation — Organization Application Received (2025)"
             html = build_confirmation_email("organization", payload, rid)
-            send_email(email, "nhcma@lutinemanagement.org", subject, html)
+            send_email(email, CC_EMAIL, subject, html)
         else:
             st.error("There was a problem saving your submission. Please try again or contact support.")
 
@@ -511,7 +506,7 @@ with tab2:
             # Send confirmation email
             subject = "NHCMA Foundation — Student Application Received (2025)"
             html = build_confirmation_email("student", payload, rid)
-            send_email(email, "nhcma@lutinemanagement.org", subject, html)
+            send_email(email, CC_EMAIL, subject, html)
         else:
             st.error("There was a problem saving your submission. Please try again or contact support.")
 
