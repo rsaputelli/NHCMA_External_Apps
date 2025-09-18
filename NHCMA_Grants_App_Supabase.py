@@ -1,7 +1,25 @@
-# NHCMA Grants Streamlit App — Supabase Edition (keys-patched)
-# Adds unique widget keys per tab (org_* and stu_*) to avoid StreamlitDuplicateElementId
 
-import os, json
+# NHCMA Grants Streamlit App — Supabase + Keys + Email + Header Notice
+# - Unique keys per widget to avoid duplicate id errors
+# - Header with logo (logo.jpg) and instructions/notice
+# - Email confirmations via SMTP (Office365) to applicant with CC to nhcma@lutinemanagement.org
+# - Supabase (DB + Storage) for submissions & uploads
+#
+# Required secrets (Streamlit Cloud -> Secrets):
+# SUPABASE_URL = https://<ref>.supabase.co
+# SUPABASE_ANON_KEY = <anon>
+# SUPABASE_BUCKET = nhcma-uploads
+# SMTP_HOST = smtp.office365.com
+# SMTP_PORT = 587
+# SMTP_USER = <your 365 user/email>
+# SMTP_PASSWORD = <app password or auth token>
+# SMTP_FROM_EMAIL = <from email shown to recipients>
+# SMTP_FROM_NAME = NHCMA Foundation Grants
+#
+# Optional: if logo.jpg is in the repo root, it will be displayed.
+
+import os, json, smtplib
+from email.message import EmailMessage
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, Tuple, Optional
@@ -30,6 +48,14 @@ def supabase_client() -> Client:
     return create_client(str(SUPABASE_URL), str(SUPABASE_ANON_KEY))
 
 sb = supabase_client()
+
+# SMTP config
+SMTP_HOST = os.getenv("SMTP_HOST") or st.secrets.get("SMTP_HOST", "smtp.office365.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT") or st.secrets.get("SMTP_PORT", 587))
+SMTP_USER = os.getenv("SMTP_USER") or st.secrets.get("SMTP_USER")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD") or st.secrets.get("SMTP_PASSWORD")
+SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL") or st.secrets.get("SMTP_FROM_EMAIL") or SMTP_USER
+SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME") or st.secrets.get("SMTP_FROM_NAME", "NHCMA Foundation Grants")
 
 def too_late(deadline: datetime) -> bool:
     now = datetime.now(ZoneInfo(TIMEZONE))
@@ -97,6 +123,52 @@ def load_submissions_df() -> pd.DataFrame:
     return df
 
 # ----------------------------
+# Email
+# ----------------------------
+def send_email(to_email: str, cc_email: Optional[str], subject: str, html_body: str) -> bool:
+    """Send email via Office365 SMTP using secrets. Returns True on success."""
+    if not (SMTP_USER and SMTP_PASSWORD and SMTP_FROM_EMAIL):
+        st.warning("Email not sent: SMTP credentials are missing in secrets.")
+        return False
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = f"{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>"
+    msg["To"] = to_email
+    if cc_email:
+        msg["Cc"] = cc_email
+    msg.set_content("This email requires an HTML-capable client.")
+    msg.add_alternative(html_body, subtype="html")
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.send_message(msg)
+        return True
+    except Exception as e:
+        st.warning(f"Email send failed: {e}")
+        return False
+
+def build_confirmation_email(track: str, payload: Dict[str, Any], record_id: Optional[int]) -> str:
+    ts = datetime.now(ZoneInfo(TIMEZONE)).strftime("%b %d, %Y %I:%M %p %Z")
+    name = payload.get("applicant_name") or payload.get("org_name") or ""
+    title = payload.get("project_title","")
+    org = payload.get("org_name","") if track=="organization" else ""
+    school = payload.get("school","") if track=="student" else ""
+    lines = [
+        f"<p>Dear {payload.get('applicant_name','Applicant')},</p>",
+        "<p>Thank you for your submission to the <strong>NHCMA Foundation — 2025 Public Health Innovation Grants</strong>.</p>",
+        f"<p><strong>Track:</strong> {track.title()}<br>",
+        f"<strong>Project Title:</strong> {title or '—'}<br>",
+        f"{'<strong>Organization:</strong> '+org+'<br>' if org else ''}",
+        f"{'<strong>School:</strong> '+school+'<br>' if school else ''}",
+        f"<strong>Timestamp:</strong> {ts}<br>",
+        f"<strong>Submission ID:</strong> {record_id or '—'}</p>",
+        "<p>We will contact you if additional information is needed. Questions may be directed to <a href='mailto:nhcma@lutinemanagement.com'>nhcma@lutinemanagement.com</a>.</p>",
+        "<p>— NHCMA Foundation</p>"
+    ]
+    return "\n".join(lines)
+
+# ----------------------------
 # Forms with unique keys
 # ----------------------------
 def org_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]:
@@ -120,7 +192,7 @@ def org_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]:
 
     st.markdown("**Eligibility (must confirm all):**")
     eligible_nonprofit = st.checkbox("Organization is a not-for-profit.", key="org_elig_np", disabled=disabled)
-    eligible_report = st.checkbox("Recipient will present final report at the NHCMA winter meeting in 2026 (date TBA).", key="org_elig_report", disabled=disabled)
+    eligible_report = st.checkbox("Recipient will present final report at the NHCMA winter meeting in 2025 (date TBA).", key="org_elig_report", disabled=disabled)
     eligible_benefit = st.checkbox("Funding will benefit residents of the Greater New Haven area.", key="org_elig_benefit", disabled=disabled)
 
     st.markdown("**Introduction & Purpose (≈250 words each):**")
@@ -154,7 +226,7 @@ def org_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]:
         "mission": mission,
         "eligibility": {
             "nonprofit": eligible_nonprofit,
-            "report_at_winter_meeting_2026": eligible_report,
+            "report_at_winter_meeting_2025": eligible_report,
             "benefit_gnh": eligible_benefit,
         },
         "project_title": project_title,
@@ -210,7 +282,7 @@ def student_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]
 
     st.markdown("**Eligibility (must confirm all):**")
     elig_enrolled = st.checkbox("I am currently enrolled at Quinnipiac (Netter) or Yale SOM.", key="stu_elig_enrolled", disabled=disabled)
-    elig_report = st.checkbox("If awarded, I will present results at the NHCMA winter meeting in 2026 (date TBA).", key="stu_elig_report", disabled=disabled)
+    elig_report = st.checkbox("If awarded, I will present results at the NHCMA winter meeting in 2025 (date TBA).", key="stu_elig_report", disabled=disabled)
 
     st.markdown("**Introduction & Purpose (≈250 words each):**")
     q1 = st.text_area("1) Public health issue addressed in Greater New Haven", key="stu_q1", disabled=disabled)
@@ -244,7 +316,7 @@ def student_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]
         "advisor_email": advisor_email,
         "eligibility": {
             "enrolled_qu_yale": elig_enrolled,
-            "report_at_winter_meeting_2026": elig_report,
+            "report_at_winter_meeting_2025": elig_report,
         },
         "project_title": project_title,
         "q1_issue": q1,
@@ -297,13 +369,33 @@ def admin_panel():
     st.download_button("Download CSV (Scoring Export)", data=csv2, file_name="nhcma_grants_scoring_export.csv", mime="text/csv", key="admin_dl_scoring")
 
 # ----------------------------
-# Main
+# Header / Main
 # ----------------------------
 st.set_page_config(page_title="NHCMA Grants 2025", layout="wide")
 
-st.title(APP_TITLE)
-st.write("**Grant Amount:** Up to $2,500 • **Submission Year:** 2025")
-st.info("Projects should benefit residents of the Greater New Haven area and be completed within one year of funding disbursement.")
+# Header with logo + title
+col_logo, col_title = st.columns([1, 5], vertical_alignment="center")
+with col_logo:
+    if os.path.exists("logo.jpg"):
+        st.image("logo.jpg", use_container_width=True)
+    else:
+        st.write("")  # blank if logo not present
+with col_title:
+    st.title(APP_TITLE)
+    st.write("**Grant Amount:** Up to $2,500 • **Submission Year:** 2025")
+
+# Instructions / Notice
+st.warning(
+    "Please have all documentation ready before you begin. "
+    "You must complete and submit the application in one session; "
+    "if you leave before submitting, you will need to start over.",
+    icon="📝"
+)
+st.info(
+    "Questions? Email the NHCMA Foundation at **nhcma@lutinemanagement.com**.",
+    icon="✉️"
+)
+st.divider()
 
 tab1, tab2, tab3 = st.tabs(["Apply — Organizations", "Apply — Medical Students", "Admin"])
 
@@ -313,6 +405,10 @@ with tab1:
         rid = insert_submission("organization", name, email, phone, payload, uploads)
         if rid:
             st.success("Thank you! Your organization application has been submitted.")
+            # Send confirmation email
+            subject = "NHCMA Foundation — Organization Application Received (2025)"
+            html = build_confirmation_email("organization", payload, rid)
+            send_email(email, "nhcma@lutinemanagement.org", subject, html)
         else:
             st.error("There was a problem saving your submission. Please try again or contact support.")
 
@@ -322,6 +418,10 @@ with tab2:
         rid = insert_submission("student", name, email, phone, payload, uploads)
         if rid:
             st.success("Thank you! Your student application has been submitted.")
+            # Send confirmation email
+            subject = "NHCMA Foundation — Student Application Received (2025)"
+            html = build_confirmation_email("student", payload, rid)
+            send_email(email, "nhcma@lutinemanagement.org", subject, html)
         else:
             st.error("There was a problem saving your submission. Please try again or contact support.")
 
@@ -329,4 +429,3 @@ with tab3:
     admin_panel()
 
 st.caption("© 2025 New Haven County Medical Association Foundation")
-
