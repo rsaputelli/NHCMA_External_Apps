@@ -129,20 +129,36 @@ def load_submissions_df() -> pd.DataFrame:
     except Exception as e:
         st.error(f"Error loading submissions: {e}")
         rows = []
+
     df = pd.DataFrame(rows)
-    if not df.empty:
-        flat = []
-        for p in df.get("payload_json", []):
-            p = p or {}
-            flat.append({
-                "Org Name": p.get("org_name", ""),
-                "Project Title": p.get("project_title", ""),
-                "School": p.get("school", ""),
-                "Advisor Name": p.get("advisor_name", ""),
-                "Budget Total": p.get("budget_total", ""),
-            })
-        df = pd.concat([df, pd.DataFrame(flat)], axis=1)
+    if df.empty:
+        return df
+
+    # Flatten key fields from payload_json
+    payload_flat = []
+    for p in df.get("payload_json", []):
+        p = p or {}
+        payload_flat.append({
+            "Org Name": p.get("org_name", ""),
+            "Project Title": p.get("project_title", ""),
+            "School": p.get("school", ""),
+            "Advisor Name": p.get("advisor_name", ""),
+            "Budget Total": p.get("budget_total", ""),
+        })
+
+    # Flatten upload URLs into separate columns
+    upload_flat = []
+    for u in df.get("uploads_json", []):
+        u = u or {}
+        upload_flat.append({
+            "Proposal URL": u.get("proposal", ""),
+            "Budget URL":   u.get("budget", ""),
+            "Other URL":    u.get("other", ""),
+        })
+
+    df = pd.concat([df, pd.DataFrame(payload_flat), pd.DataFrame(upload_flat)], axis=1)
     return df
+
 
 # ----------------------------
 # Email
