@@ -205,6 +205,7 @@ with st.form("poster_form", clear_on_submit=True):
     submit = st.form_submit_button("Submit Poster")
 
 # Validation + submit
+# Validation + submit (DE-DUPED)
 if submit:
     required = [category, lead_author, title, abstract, contact_email]
     if not all((x or "").strip() for x in required):
@@ -212,90 +213,61 @@ if submit:
     elif len(abstract.split()) > 250:
         st.warning("Abstract appears to exceed 250 words. Please shorten.", icon="⚠️")
     else:
-        poster_url = save_upload_to_storage(poster_file, prefix="posters") if poster_file else ""
-        payload = {
-            "category": category,
-            "lead_author": lead_author.strip(),
-            "coauthor1": (co1 or "").strip(),
-            "coauthor2": (co2 or "").strip(),
-            "coauthor3": (co3 or "").strip(),
-            "institution_lead": (inst_lead or "").strip(),
-            "institution_co1": (inst_co1 or "").strip(),
-            "institution_co2": (inst_co2 or "").strip(),
-            "institution_co3": (inst_co3 or "").strip(),
-            "title": title.strip(),
-            "abstract": abstract.strip(),
-            "poster_url": poster_url,
-            "contact_email": (contact_email or "").strip(),
-        }
-        rid = insert_poster(payload)
-        if rid:
-            st.success("Thank you! Your poster has been submitted.")
-            when = datetime.now(ZoneInfo(TIMEZONE)).strftime("%b %d, %Y %I:%M %p %Z")
-            subj = "NHCMA — Poster Submission Received"
-            link_html = f'<br><strong>Poster file:</strong> <a href="{poster_url}">View</a>' if poster_url else ""
-            html = f"""
-                <p>Dear {lead_author},</p>
-                <p>Thank you for submitting your <strong>{category}</strong> research poster to the NHCMA Foundation.</p>
-                <p>
-                    <strong>Title:</strong> {title}<br>
-                    <strong>Submitted:</strong> {when}
-                    {link_html}
-                </p>
-                <p>We will contact you if additional information is needed.<br>
-                Questions: <a href="mailto:nhcma@lutinemanagement.com">nhcma@lutinemanagement.com</a></p>
-                <p>— NHCMA Foundation</p>
-            """
-            send_email(contact_email, CC_EMAIL, subj, html)
-        else:
-            st.error("There was a problem saving your submission. Please try again or contact support.")
+        # build a stable token for this exact submission
+        token_parts = [
+            category.strip(),
+            (lead_author or "").strip(),
+            (contact_email or "").strip(),
+            (title or "").strip(),
+            str(len((abstract or "").strip())),
+            poster_file.name if poster_file else "",
+        ]
+        submission_token = "|".join(token_parts)
 
-
-if submit:
-    required = [category, lead_author, title, abstract, contact_email]
-    if not all((x or "").strip() for x in required):
-        st.warning("Please complete all required fields marked with *.", icon="⚠️")
-    elif len(abstract.split()) > 250:
-        st.warning("Abstract appears to exceed 250 words. Please shorten.", icon="⚠️")
-    else:
-        poster_url = save_upload_to_storage(poster_file, prefix="posters") if poster_file else ""
-        payload = {
-            "category": category,
-            "lead_author": lead_author.strip(),
-            "coauthor1": (co1 or "").strip(),
-            "coauthor2": (co2 or "").strip(),
-            "coauthor3": (co3 or "").strip(),
-            "institution_lead": (inst_lead or "").strip(),
-            "institution_co1": (inst_co1 or "").strip(),
-            "institution_co2": (inst_co2 or "").strip(),
-            "institution_co3": (inst_co3 or "").strip(),
-            "title": title.strip(),
-            "abstract": abstract.strip(),
-            "poster_url": poster_url,
-            "contact_email": (contact_email or "").strip(),
-        }
-        rid = insert_poster(payload)
-        if rid:
-            st.success("Thank you! Your poster has been submitted.")
-            # Confirmation email to submitter with CC to NHCMA
-            when = datetime.now(ZoneInfo(TIMEZONE)).strftime("%b %d, %Y %I:%M %p %Z")
-            subj = "NHCMA — Poster Submission Received"
-            link_html = f'<br><strong>Poster file:</strong> <a href="{poster_url}">View</a>' if poster_url else ""
-            html = f"""
-                <p>Dear {lead_author},</p>
-                <p>Thank you for submitting your <strong>{category}</strong> research poster to the NHCMA Foundation.</p>
-                <p>
-                    <strong>Title:</strong> {title}<br>
-                    <strong>Submitted:</strong> {when}
-                    {link_html}
-                </p>
-                <p>We will contact you if additional information is needed.<br>
-                Questions: <a href="mailto:nhcma@lutinemanagement.com">nhcma@lutinemanagement.com</a></p>
-                <p>— NHCMA Foundation</p>
-            """
-            send_email(contact_email, CC_EMAIL, subj, html)
+        # skip if we already processed this token
+        if st.session_state.get("last_poster_token") == submission_token:
+            st.info("This submission was already received. (Duplicate prevented)")
         else:
-            st.error("There was a problem saving your submission. Please try again or contact support.")
+            poster_url = save_upload_to_storage(poster_file, prefix="posters") if poster_file else ""
+            payload = {
+                "category": category,
+                "lead_author": lead_author.strip(),
+                "coauthor1": (co1 or "").strip(),
+                "coauthor2": (co2 or "").strip(),
+                "coauthor3": (co3 or "").strip(),
+                "institution_lead": (inst_lead or "").strip(),
+                "institution_co1": (inst_co1 or "").strip(),
+                "institution_co2": (inst_co2 or "").strip(),
+                "institution_co3": (inst_co3 or "").strip(),
+                "title": title.strip(),
+                "abstract": abstract.strip(),
+                "poster_url": poster_url,
+                "contact_email": (contact_email or "").strip(),
+            }
+            rid = insert_poster(payload)
+            if rid:
+                st.session_state["last_poster_token"] = submission_token
+                st.success("Thank you! Your poster has been submitted.")
+                when = datetime.now(ZoneInfo(TIMEZONE)).strftime("%b %d, %Y %I:%M %p %Z")
+                subj = "NHCMA — Poster Submission Received"
+                link_html = f'<br><strong>Poster file:</strong> <a href="{poster_url}">View</a>' if poster_url else ""
+                html = f"""
+                    <p>Dear {lead_author},</p>
+                    <p>Thank you for submitting your <strong>{category}</strong> research poster to the NHCMA Foundation.</p>
+                    <p>
+                        <strong>Title:</strong> {title}<br>
+                        <strong>Submitted:</strong> {when}
+                        {link_html}
+                    </p>
+                    <p>We will contact you if additional information is needed.<br>
+                    Questions: <a href="mailto:nhcma@lutinemanagement.com">nhcma@lutinemanagement.com</a></p>
+                    <p>— NHCMA Foundation</p>
+                """
+                send_email(contact_email, CC_EMAIL, subj, html)
+                st.stop()  # end this run cleanly
+            else:
+                st.error("There was a problem saving your submission. Please try again or contact support.")
+
 
 # ---------- Admin (password-gated) ----------
 
