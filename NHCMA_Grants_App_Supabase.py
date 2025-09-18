@@ -455,6 +455,11 @@ with tab2:
 
 with tab3:
     if _admin_allowed():
+        # Show a logout button once admin is unlocked
+        if st.session_state.get("admin_ok"):
+            if st.button("Log out", key="admin_logout"):
+                st.session_state["admin_ok"] = False
+                st.experimental_rerun()
         admin_panel()
     else:
         st.stop()
