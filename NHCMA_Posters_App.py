@@ -201,7 +201,7 @@ with st.form("poster_form", clear_on_submit=True):
     # Row 4: Poster file
     st.markdown("**Poster File (optional)**")
     poster_file = st.file_uploader("Upload PDF", type=["pdf"], key="poster_pdf")
-    st.markdown("*By clicking Submit, you agree that if selected, you will attend and present at the NHCMA Annual Meeting on Nov.18, 2025 at Birchwoods)**")
+    st.markdown("*By clicking Submit you agree that if selected, you will attend and present at the NHCMA Annual Meeting on Nov.18, 2025 at Birchwoods**")
     submit = st.form_submit_button("Submit Poster")
 
 # Validation + submit (DE-DUPED)
