@@ -71,7 +71,7 @@ def render_header():
     left, right = st.columns([1, 3], vertical_alignment="center")
     with left:
         if logo_path:
-            st.image(str(logo_path), width=300))
+            st.image(str(logo_path), width=300)
         else:
             st.write("")  # spacer
     with right:
