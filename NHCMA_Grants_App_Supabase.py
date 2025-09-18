@@ -376,8 +376,8 @@ st.set_page_config(page_title="NHCMA Grants 2025", layout="wide")
 # Header with logo + title
 col_logo, col_title = st.columns([1, 5], vertical_alignment="center")
 with col_logo:
-    if os.path.exists("logo.jpg"):
-        st.image("logo.jpg", use_container_width=True)
+    if os.path.exists("assets/logo.jpg"):
+        st.image("assets/logo.jpg", use_container_width=True)
     else:
         st.write("")  # blank if logo not present
 with col_title:
