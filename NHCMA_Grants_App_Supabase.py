@@ -3,6 +3,8 @@ from email.message import EmailMessage
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, Tuple, Optional
+import secrets
+from urllib.parse import urlparse, parse_qs
 
 import io
 import streamlit as st
@@ -530,6 +532,202 @@ def admin_panel():
             use_container_width=True,
         )
 
+
+def _judging_enabled() -> bool:
+    """Feature flag for the Judging module. Defaults to True so you can test immediately."""
+    try:
+        return bool(st.secrets.get("FEATURE_JUDGING", True))
+    except Exception:
+        return True
+
+
+# ======== Judging Add-on (self-contained) ========
+def _create_invite(judge_email: str, full_name: str, days_valid: int = 30):
+    j = sb_admin.table("judges").upsert(
+        {"email": judge_email.lower().strip(), "full_name": full_name, "is_active": True},
+        on_conflict="email"
+    ).execute()
+    token = secrets.token_urlsafe(32)
+    # Use UTC now for expires_at if ZoneInfo not available earlier in file
+    expires_at = datetime.utcnow().replace(tzinfo=None) + pd.Timedelta(days=days_valid)
+    res = sb_admin.table("judge_invites").insert({
+        "email": judge_email.lower().strip(),
+        "token": token,
+        "expires_at": expires_at
+    }).execute()
+    return token
+
+def _send_invite(judge_email: str, full_name: str, app_base_url: str):
+    token = _create_invite(judge_email, full_name)
+    link = f"{app_base_url}?judge_token={token}"
+    html = f"""
+    <p>Dear {full_name},</p>
+    <p>You have been invited to serve as a judge for the NHCMA Foundation Grants.</p>
+    <p>Please use the secure link below to access the judging portal:</p>
+    <p><a href="{link}">{link}</a></p>
+    <p>Thank you,<br>NHCMA Foundation</p>
+    """
+    try:
+        send_email(judge_email, CC_EMAIL, "NHCMA Grants — Judge Invitation", html)
+    except Exception as e:
+        st.error(f"Failed to send invite: {e}")
+
+def _resolve_token(judge_token: str):
+    try:
+        inv = sb_admin.table("judge_invites").select("*").eq("token", judge_token).execute().data
+    except Exception:
+        return None
+    if not inv:
+        return None
+    inv = inv[0]
+    try:
+        judge = sb_admin.table("judges").select("*").eq("email", inv["email"]).single().execute().data
+    except Exception:
+        return None
+    if not judge or not judge.get("is_active"):
+        return None
+    return {"judge_id": judge["id"], "email": judge["email"], "name": judge["full_name"]}
+
+def _scoring_criteria_for_track(track: str):
+    if track == "student":
+        return [
+            ("feasibility",    "Feasibility of Project Completion Within 1 Year (1–5)"),
+            ("alignment",      "Alignment with NHCMA Foundation Mission/Goals (1–5)"),
+            ("community_eval", "Addresses Specific Community Need & Evaluation (1–5)"),
+            ("clarity",        "Clarity & Comprehensiveness (1–5)"),
+            ("budget",         "Budget Appropriateness (1–5)"),
+        ]
+    else:
+        return [
+            ("innovativeness", "Innovativeness (1–5)"),
+            ("feasibility",    "Feasibility of Project Completion Within 1 Year (1–5)"),
+            ("alignment",      "Alignment with NHCMA Foundation Mission/Goals (1–5)"),
+            ("community_eval", "Addresses Specific Community Need & Evaluation (1–5)"),
+            ("clarity",        "Clarity & Comprehensiveness (1–5)"),
+            ("budget",         "Budget Appropriateness (1–5)"),
+        ]
+
+def _score_total(track: str, vals: dict) -> int:
+    keys = [k for k, _ in _scoring_criteria_for_track(track)]
+    return int(sum(int(vals.get(k, 0) or 0) for k in keys))
+
+def judging_portal():
+    # token from URL
+    tok = st.query_params.get("judge_token")
+    if tok and "judge_session" not in st.session_state:
+        who = _resolve_token(tok)
+        if who:
+            st.session_state["judge_session"] = who
+            st.success(f"Welcome, {who['name']} — judging unlocked.")
+        else:
+            st.error("Invalid or expired invite link.")
+
+    who = st.session_state.get("judge_session")
+    if not who:
+        st.info("To access judging, please use the personal invite link sent to your email.")
+        return
+
+    st.markdown(f"**Judge:** {who['name']} ({who['email']})")
+
+    df = load_submissions_df()
+    if df is None or df.empty:
+        st.info("No submissions yet.")
+        return
+
+    df["Project Title"] = df.get("Q: project_title", df.get("project_title", ""))
+    df["Org Name"]      = df.get("Q: org_name", df.get("org_name", ""))
+    df["School"]        = df.get("Q: school", df.get("school", ""))
+
+    track = st.radio("Select track", ["student","organization"], horizontal=True)
+    sdf = df[df["track"] == track].copy()
+    st.dataframe(
+        sdf[["id","Project Title","Org Name","School","Proposal URL","Budget URL"]].fillna(""),
+        use_container_width=True,
+        column_config={
+            "Proposal URL": st.column_config.LinkColumn("Proposal URL"),
+            "Budget URL":   st.column_config.LinkColumn("Budget URL"),
+        },
+        hide_index=True
+    )
+
+    options = [(int(r["id"]), f"#{int(r['id'])}: {r['Project Title'] or '(untitled)'}") for _, r in sdf.iterrows()]
+    choice = st.selectbox("Choose a submission", options, format_func=lambda t: t[1])
+    if not choice:
+        return
+    submission_id = choice[0]
+
+    prev = []
+    try:
+        prev = sb_admin.table("scores").select("*").eq("submission_id", submission_id).eq("judge_id", who["judge_id"]).execute().data or []
+    except Exception:
+        prev = []
+    prev = prev[0] if prev else {}
+
+    with st.form(f"judge_form_{submission_id}", clear_on_submit=False):
+        st.markdown("### Score this submission")
+        vals = {}
+        for key, label in _scoring_criteria_for_track(track):
+            default_val = int(prev.get(key, 3) or 3)
+            vals[key] = st.number_input(label, min_value=1, max_value=5, step=1, value=default_val, key=f"{key}_{submission_id}")
+        total = _score_total(track, vals)
+        st.metric("Total Points", total)
+        comments = st.text_area("Comments (optional, visible to committee)", value=prev.get("comments") or "")
+        submitted = st.form_submit_button("Save Score", type="primary")
+
+    if submitted:
+        payload = {
+            "submission_id": submission_id,
+            "judge_id": who["judge_id"],
+            "track": track,
+            **vals,
+            "total_points": total,
+            "comments": comments,
+            "submitted_at": datetime.utcnow().isoformat()
+        }
+        try:
+            sb_admin.table("scores").upsert(payload, on_conflict="submission_id,judge_id").execute()
+            st.success("Score saved.")
+        except Exception as e:
+            st.error(f"Failed to save: {e}")
+
+def admin_judging_tools(app_base_url: str):
+    st.subheader("Judges & Invites")
+    with st.form("invite_form", clear_on_submit=True):
+        j_name = st.text_input("Judge Name")
+        j_email = st.text_input("Judge Email")
+        send = st.form_submit_button("Send Invite")
+    if send:
+        _send_invite(j_email, j_name, app_base_url)
+        st.success(f"Invite sent to {j_name} ({j_email}).")
+
+    st.subheader("Scoring Tally")
+    try:
+        s = sb_admin.table("scores").select("*").execute().data or []
+        sc = pd.DataFrame(s)
+    except Exception:
+        sc = pd.DataFrame()
+
+    subs = load_submissions_df()
+    if sc.empty or subs is None or subs.empty:
+        st.info("No scores yet.")
+        return
+    merged = sc.merge(
+        subs[["id","track","Q: project_title","Q: org_name","Q: school"]].rename(
+            columns={"Q: project_title":"Project Title","Q: org_name":"Org Name","Q: school":"School"}
+        ),
+        left_on=["submission_id","track"], right_on=["id","track"], how="left"
+    )
+    agg = (merged.groupby(["track","submission_id","Project Title","Org Name","School"])
+                 .agg(avg_total=("total_points","mean"),
+                      n_scores=("total_points","count"))
+                 .reset_index()
+                 .sort_values(["track","avg_total","n_scores"], ascending=[True, False, False]))
+    st.dataframe(agg, use_container_width=True)
+    st.download_button("Download Tally (CSV)",
+                       agg.to_csv(index=False).encode("utf-8"),
+                       "nhcma_scoring_tally.csv",
+                       "text/csv")
+
 # ----------------------------
 # Header / Main
 # ----------------------------
@@ -559,7 +757,14 @@ st.info(
 )
 st.divider()
 
-tab1, tab2, tab3 = st.tabs(["Apply — Organizations", "Apply — Medical Students", "Admin"])
+if _judging_enabled():
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "Apply — Organizations", "Apply — Medical Students", "Admin", "Judging"
+    ])
+else:
+    tab1, tab2, tab3 = st.tabs([
+        "Apply — Organizations", "Apply — Medical Students", "Admin"
+    ])
 
 with tab1:
     submitted, payload, uploads, name, email, phone = org_form()
@@ -590,6 +795,10 @@ with tab2:
 with tab3:
     if _admin_allowed():
         admin_panel()
+        if _judging_enabled():
+            st.divider()
+            st.caption("Judging — Invites & Tally")
+            admin_judging_tools(app_base_url=st.secrets.get("APP_BASE_URL", "https://your-app.streamlit.app"))
     else:
         st.stop()
 
