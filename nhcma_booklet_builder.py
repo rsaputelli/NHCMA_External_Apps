@@ -1,32 +1,3 @@
-"""
-NHCMA Grants — Booklet Builder (batch + storage)
-
-What this module does
----------------------
-• Builds a DOCX "booklet" for each submission from the original payload_json (no need to surface every field in the judging DF)
-• Uploads each booklet to a private Supabase Storage bucket (e.g., `nhcma-booklets`)
-• Writes the storage path (and optional short‑lived signed URL) back to the `submissions` row
-• Provides a batch function (“build all booklets”) you can wire to a Streamlit admin button
-
-Assumptions
------------
-• Table name: submissions (columns include id, track, created_at, payload_json)
-• New columns: booklet_docx_path (text), booklet_updated_at (timestamptz), booklet_version (int, optional)
-• Secrets in Streamlit: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
-• Bucket name: nhcma-booklets (private)
-
-Notes on signed URLs
---------------------
-Signed URLs expire. Persist the storage path in the row, and generate a fresh signed URL when rendering the judge UI. You *can* also store a signed URL after build, but it will eventually expire and should be refreshed.
-
-Dependencies
-------------
-• supabase-py
-• python-docx
-
-pip install supabase python-docx
-
-"""
 from __future__ import annotations
 import io
 import json
@@ -98,10 +69,10 @@ def list_submissions(sb: Client, where: Dict[str, Any] | None = None) -> List[Di
             for k, v in where.items():
                 q = q.eq(k, v)
         except Exception:
-            pass  # if the column doesn't exist, just skip filter
+            # if the column doesn't exist, just skip filter
+            pass
     res = q.execute()
     return res.data or []
-
 
 
 def update_submission_paths(sb: Client, submission_id: Any, path_docx: str, version: int | None = None) -> None:
@@ -116,17 +87,15 @@ def update_submission_paths(sb: Client, submission_id: Any, path_docx: str, vers
 
 def upload_bytes(sb: Client, bucket: str, path: str, data: bytes, content_type: str) -> None:
     storage = sb.storage.from_(bucket)
-    # supabase-py expects "contentType" (camelCase) and returns a dict on success
+    # supabase-py expects "contentType" (camelCase) and upsert as a string
     resp = storage.upload(
         path=path,
         file=data,
-        file_options={"contentType": content_type, "upsert": "true"},  # <-- string is required
+        file_options={"contentType": content_type, "upsert": "true"},
     )
-
     # Basic sanity check: raise if error-like payload returned
     if isinstance(resp, dict) and resp.get("error"):
         raise RuntimeError(f"Storage upload failed: {resp['error']}")
-
 
 
 def make_signed_url(sb: Client, bucket: str, path: str, expires_in_seconds: int = 86400) -> str:
@@ -234,17 +203,40 @@ def build_booklet_docx(submission_row: Dict[str, Any]) -> bytes:
                 para.add_run(pretty)
         doc.add_paragraph("")
 
-    # --- Attachments Section ---
-    uploads = row.get("uploads_json") or {}
+    # --- Attachments Section (print clickable URLs) ---
+    uploads = submission_row.get("uploads_json") or {}
+    if isinstance(uploads, str):
+        try:
+            uploads = json.loads(uploads)
+        except Exception:
+            uploads = {}
+
     doc.add_heading("Attachments", level=2)
-    if any(k in uploads for k in ["proposal", "budget", "cv", "support_letter", "other"]):
-        for k, v in uploads.items():
-            if isinstance(v, str) and v.startswith("https://"):
-                doc.add_paragraph(f"{human_label(k)}: {v}")
-    else:
+    ATTACHMENT_KEYS = ["proposal", "budget", "other", "cv", "support_letter"]
+    any_written = False
+    for key in ATTACHMENT_KEYS:
+        # Skip CV/support letter for org track
+        if str(track).lower().startswith("org") and key in ("cv", "support_letter"):
+            continue
+
+        # Prefer uploads_json → fallback to payload
+        url = None
+        v = uploads.get(key)
+        if isinstance(v, str) and v.strip():
+            url = v
+        else:
+            pv = get_value(payload, key) or payload.get(key)
+            if isinstance(pv, str) and pv.strip():
+                url = pv
+
+        para = doc.add_paragraph()
+        run = para.add_run(f"{human_label(key)}: ")
+        run.bold = True
+        para.add_run(url if url else "—")
+        any_written = any_written or bool(url)
+
+    if not any_written:
         doc.add_paragraph("No attachments uploaded.")
-
-
 
     # Optional: dump any extra fields not covered above under an Appendix
     covered = {k for _, lst in sections for k in lst}
