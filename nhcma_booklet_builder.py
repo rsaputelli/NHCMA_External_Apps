@@ -122,7 +122,7 @@ def upload_bytes(sb: Client, bucket: str, path: str, data: bytes, content_type: 
         file=data,
         file_options={"contentType": content_type, "upsert": "true"},  # <-- string is required
     )
-    )
+
     # Basic sanity check: raise if error-like payload returned
     if isinstance(resp, dict) and resp.get("error"):
         raise RuntimeError(f"Storage upload failed: {resp['error']}")
