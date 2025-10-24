@@ -737,51 +737,51 @@ def judging_portal():
     def _score_total(track: str, vals: dict) -> int:
         keys = [k for k, _ in _scoring_criteria_for_track(track)]
         return int(sum(int(vals.get(k, 0) or 0) for k in keys))
+        
+    # --- Live-scoring widgets (no form) ---
+    st.markdown("### Score this submission")
 
-# --- Live-scoring widgets (no form) ---
-st.markdown("### Score this submission")
-
-# Comments first so it persists between edits
-comments_key = f"comments_{submission_id}"
-if comments_key not in st.session_state:
-    st.session_state[comments_key] = prev.get("comments") or ""
-comments = st.text_area(
-    "Comments (optional, visible to committee)",
-    key=comments_key
-)
-
-# Seed and render the scoring inputs
-vals = {}
-for key, label in _scoring_criteria_for_track(track):
-    state_key = f"{key}_{submission_id}"
-    if state_key not in st.session_state:
-        st.session_state[state_key] = int(prev.get(key, 3) or 3)
-    vals[key] = st.number_input(
-        label, min_value=1, max_value=5, step=1, key=state_key
+    # Comments first so it persists between edits
+    comments_key = f"comments_{submission_id}"
+    if comments_key not in st.session_state:
+        st.session_state[comments_key] = prev.get("comments") or ""
+    comments = st.text_area(
+        "Comments (optional, visible to committee)",
+        key=comments_key
     )
 
-# Compute total live (updates instantly on any change)
-live_vals = {k: int(st.session_state[f"{k}_{submission_id}"]) for k, _ in _scoring_criteria_for_track(track)}
-total = _score_total(track, live_vals)
-st.metric("Total Points", total)
+    # Seed and render the scoring inputs
+    vals = {}
+    for key, label in _scoring_criteria_for_track(track):
+        state_key = f"{key}_{submission_id}"
+        if state_key not in st.session_state:
+            st.session_state[state_key] = int(prev.get(key, 3) or 3)
+        vals[key] = st.number_input(
+            label, min_value=1, max_value=5, step=1, key=state_key
+        )
 
-# Save current values
-if st.button("Save Score", type="primary", key=f"save_{submission_id}"):
-    payload = {
-        "submission_id": submission_id,
-        "judge_id": who["judge_id"],
-        "track": track,
-        **live_vals,
-        "total_points": total,
-        "comments": st.session_state[comments_key],
-        "submitted_at": datetime.utcnow().isoformat()
-    }
-    try:
-        sb_admin.table("scores").upsert(payload, on_conflict="submission_id,judge_id").execute()
-        st.success("Score saved.")
-    except Exception as e:
-        st.error(f"Failed to save: {e}")
+    # Compute total live (updates instantly on any change)
+    live_vals = {k: int(st.session_state[f"{k}_{submission_id}"]) for k, _ in _scoring_criteria_for_track(track)}
+    total = _score_total(track, live_vals)
+    st.metric("Total Points", total)
 
+    # Save current values
+    if st.button("Save Score", type="primary", key=f"save_{submission_id}"):
+        payload = {
+            "submission_id": submission_id,
+            "judge_id": who["judge_id"],
+            "track": track,
+            **live_vals,
+            "total_points": total,
+            "comments": st.session_state[comments_key],
+            "submitted_at": datetime.utcnow().isoformat()
+        }
+        try:
+            sb_admin.table("scores").upsert(payload, on_conflict="submission_id,judge_id").execute()
+            st.success("Score saved.")
+        except Exception as e:
+            st.error(f"Failed to save: {e}")
+        
 
 def admin_judging_tools(app_base_url: str | None = None):
     st.subheader("Judges & Invites")
