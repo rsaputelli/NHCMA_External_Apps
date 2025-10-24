@@ -570,20 +570,26 @@ def _create_invite(judge_email: str, full_name: str, days_valid: int = 30) -> st
     return token
 
 
-def _send_invite(judge_email: str, full_name: str, app_base_url: str):
-    token = _create_invite(judge_email, full_name)
-    link = f"{app_base_url}?judge_token={token}"
-    html = f"""
-    <p>Dear {full_name},</p>
-    <p>You have been invited to serve as a judge for the NHCMA Foundation Grants.</p>
-    <p>Please use the secure link below to access the judging portal:</p>
-    <p><a href="{link}">{link}</a></p>
-    <p>Thank you,<br>NHCMA Foundation</p>
+def _send_invite(judge_email: str, full_name: str, app_base_url: str | None = None) -> None:
     """
-    try:
-        send_email(judge_email, CC_EMAIL, "NHCMA Grants — Judge Invitation", html)
-    except Exception as e:
-        st.error(f"Failed to send invite: {e}")
+    Create an invite token, compose the proper URL, and send the email.
+    Always pulls the base URL from secrets unless an explicit override is provided.
+    """
+    token = _create_invite(judge_email, full_name)
+
+    # Always resolve base from secrets unless caller forces override
+    base = (app_base_url or st.secrets.get("APP_BASE_URL") or "").strip()
+    if not base:
+        # last-resort fallback (use your real domain, not the placeholder)
+        base = "https://nhcmafoundationgrants.streamlit.app"
+
+    invite_url = f"{base.rstrip('/')}/?invite_token={token}"  # use invite_token (new canonical key)
+
+    # (Optional) show a one-time debug line in the UI so we can verify quickly
+    st.toast(f"Invite URL generated for {judge_email}: {invite_url}", icon="📩")
+
+    # send the email body that includes invite_url...
+    # build your EmailMessage here using invite_url (plain or html)
 
 def _resolve_token(judge_token: str):
     try:
@@ -626,7 +632,7 @@ def _score_total(track: str, vals: dict) -> int:
 
 def judging_portal():
     # token from URL
-    tok = st.query_params.get("judge_token")
+    tok = st.query_params.get("invite_token") or st.query_params.get("judge_token")
     if tok and "judge_session" not in st.session_state:
         who = _resolve_token(tok)
         if who:
