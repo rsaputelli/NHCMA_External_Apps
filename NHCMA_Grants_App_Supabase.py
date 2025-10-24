@@ -559,20 +559,24 @@ def _judging_enabled() -> bool:
 def _create_invite(judge_email: str, full_name: str, days_valid: int = 30) -> str:
     email = str(judge_email).strip().lower()
     token = str(secrets.token_urlsafe(32))
-    # Force ISO string with Z
     expires_at = (datetime.now(timezone.utc) + timedelta(days=days_valid)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     payload = {"email": email, "token": token, "expires_at": expires_at}
-    json.dumps(payload)  # preflight: will raise TypeError if anything isn't serializable
+    json.dumps(payload)  # preflight
 
+    # 🔧 ensure the judge is active
     sb_admin.table("judges").upsert(
-        {"email": email, "full_name": str(full_name or "").strip()},
+        {
+            "email": email,
+            "full_name": str(full_name or "").strip(),
+            "is_active": True,   # <-- REQUIRED so _resolve_token() will allow them in
+        },
         on_conflict="email"
     ).execute()
 
     sb_admin.table("judge_invites").upsert(
-        payload,                    # {"email": email, "token": token, "expires_at": expires_at}
-        on_conflict="email"         # replaces existing row for this email
+        payload,
+        on_conflict="email"
     ).execute()
 
     return token
@@ -765,8 +769,10 @@ st.set_page_config(page_title="NHCMA Grants 2025", layout="wide")
 
 # --- Early invite-token resolver (runs before UI) ---
 def _consume_invite_from_query():
+    st.toast("Invite resolver running...", icon="🕵️")   # <--- debug line 1
     try:
         params = dict(st.query_params) if hasattr(st, "query_params") else st.experimental_get_query_params()
+        st.toast(f"Query params: {params}", icon="🔍")   # <--- debug line 2
         token = None
         if params:
             token = (params.get("invite_token") or [None])[0] if isinstance(params.get("invite_token"), list) else params.get("invite_token")
@@ -789,6 +795,7 @@ def _consume_invite_from_query():
     except Exception as e:
         st.error("Could not process invite. Please try again.")
         st.exception(e)
+
 
 _consume_invite_from_query()
 
