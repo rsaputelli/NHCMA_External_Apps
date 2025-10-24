@@ -646,34 +646,49 @@ def _score_total(track: str, vals: dict) -> int:
     return int(sum(int(vals.get(k, 0) or 0) for k in keys))
 
 def judging_portal():
-    # token from URL
-    tok = st.query_params.get("invite_token") or st.query_params.get("judge_token")
-    if tok and "judge_session" not in st.session_state:
-        who = _resolve_token(tok)
-        if who:
-            st.session_state["judge_session"] = who
-            st.success(f"Welcome, {who['name']} — judging unlocked.")
-        else:
-            st.error("Invalid or expired invite link.")
-
+    # --- visibility + identity debug (always show something) ---
+    st.caption("🧭 Judging portal loaded")
     who = st.session_state.get("judge_session")
     if not who:
-        st.info("To access judging, please use the personal invite link sent to your email.")
+        st.info("To access judging, please use your personal invite link. (No judge session detected.)")
+        # Optional: show current query params for troubleshooting
+        try:
+            qp = dict(st.query_params) if hasattr(st, "query_params") else st.experimental_get_query_params()
+            if qp:
+                st.code(f"Query params: {qp}", language="text")
+        except Exception:
+            pass
         return
 
     st.markdown(f"**Judge:** {who['name']} ({who['email']})")
 
+    # --- load submissions ---
     df = load_submissions_df()
     if df is None or df.empty:
-        st.info("No submissions yet.")
+        st.info("No submissions available yet.")
         return
 
+    # normalize convenient display columns
     df["Project Title"] = df.get("Q: project_title", df.get("project_title", ""))
     df["Org Name"]      = df.get("Q: org_name", df.get("org_name", ""))
     df["School"]        = df.get("Q: school", df.get("school", ""))
 
-    track = st.radio("Select track", ["student","organization"], horizontal=True)
+    # --- pick a sensible default track that actually has rows ---
+    tracks_present = [t for t in ["student", "organization"] if t in set(df["track"].dropna().tolist())]
+    if not tracks_present:
+        st.info("Submissions table is present, but no recognized tracks ('student'/'organization') were found.")
+        st.dataframe(df, use_container_width=True)
+        return
+
+    default_track = tracks_present[0]  # choose the first track that has data
+    track = st.radio("Select track", ["student", "organization"], horizontal=True,
+                     index=["student", "organization"].index(default_track))
+
     sdf = df[df["track"] == track].copy()
+    if sdf.empty:
+        st.info(f"No submissions for the **{track}** track yet.")
+        return
+
     st.dataframe(
         sdf[["id","Project Title","Org Name","School","Proposal URL","Budget URL"]].fillna(""),
         use_container_width=True,
@@ -684,18 +699,44 @@ def judging_portal():
         hide_index=True
     )
 
+    # submission chooser
     options = [(int(r["id"]), f"#{int(r['id'])}: {r['Project Title'] or '(untitled)'}") for _, r in sdf.iterrows()]
-    choice = st.selectbox("Choose a submission", options, format_func=lambda t: t[1])
-    if not choice:
+    if not options:
+        st.info("No selectable submissions found for this track.")
         return
-    submission_id = choice[0]
+    submission_id = st.selectbox("Choose a submission", options, format_func=lambda t: t[1], index=0)[0]
 
+    # load any previous score by this judge
     prev = []
     try:
         prev = sb_admin.table("scores").select("*").eq("submission_id", submission_id).eq("judge_id", who["judge_id"]).execute().data or []
     except Exception:
         prev = []
     prev = prev[0] if prev else {}
+
+    # criteria per track
+    def _scoring_criteria_for_track(track: str):
+        if track == "student":
+            return [
+                ("feasibility",    "Feasibility of Project Completion Within 1 Year (1–5)"),
+                ("alignment",      "Alignment with NHCMA Foundation Mission/Goals (1–5)"),
+                ("community_eval", "Addresses Specific Community Need & Evaluation (1–5)"),
+                ("clarity",        "Clarity & Comprehensiveness (1–5)"),
+                ("budget",         "Budget Appropriateness (1–5)"),
+            ]
+        else:
+            return [
+                ("innovativeness", "Innovativeness (1–5)"),
+                ("feasibility",    "Feasibility of Project Completion Within 1 Year (1–5)"),
+                ("alignment",      "Alignment with NHCMA Foundation Mission/Goals (1–5)"),
+                ("community_eval", "Addresses Specific Community Need & Evaluation (1–5)"),
+                ("clarity",        "Clarity & Comprehensiveness (1–5)"),
+                ("budget",         "Budget Appropriateness (1–5)"),
+            ]
+
+    def _score_total(track: str, vals: dict) -> int:
+        keys = [k for k, _ in _scoring_criteria_for_track(track)]
+        return int(sum(int(vals.get(k, 0) or 0) for k in keys))
 
     with st.form(f"judge_form_{submission_id}", clear_on_submit=False):
         st.markdown("### Score this submission")
@@ -723,6 +764,7 @@ def judging_portal():
             st.success("Score saved.")
         except Exception as e:
             st.error(f"Failed to save: {e}")
+
 
 def admin_judging_tools(app_base_url: str | None = None):
     st.subheader("Judges & Invites")
