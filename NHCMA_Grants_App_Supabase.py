@@ -592,6 +592,12 @@ def admin_panel():
 
         st.success("Done.")
         st.dataframe(report)
+
+        # TEMP: show individual errors inline
+        for i, r in enumerate(report, start=1):
+            if r.get("status") == "error":
+                st.error(f"[{i}] Upload/update failed: {r.get('error')}")
+
         ok = sum(1 for r in report if r.get("status") == "ok")
         err = sum(1 for r in report if r.get("status") == "error")
         st.write(f"Built {ok} OK / {err} errors")
