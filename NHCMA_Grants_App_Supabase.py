@@ -589,7 +589,8 @@ def _send_invite(judge_email: str, full_name: str, app_base_url: str | None = No
     if not base:
         base = "https://nhcmafoundationgrants.streamlit.app"
 
-    invite_url = f"{base.rstrip('/')}/?invite_token={token}"  # canonical key
+    # ✅ Canonical: invite_token query param
+    invite_url = f"{base.rstrip('/')}/?invite_token={token}"
 
     # Optional: visual confirmation in Admin UI
     try:
@@ -597,20 +598,16 @@ def _send_invite(judge_email: str, full_name: str, app_base_url: str | None = No
     except Exception:
         pass
 
-    # --- actually send the email (no SMTP changes) ---
+    # ✉️ Send using your existing SMTP helper (to, cc, subject, html)
     subject = "Your NHCMA Judge Invite"
-    body_text = (
-        "You're invited to judge NHCMA grants.\n\n"
-        f"Use this link to access the judging portal:\n{invite_url}\n\n"
-        "If you didn't expect this, you can ignore this message."
-    )
     body_html = f"""
         <p>You're invited to judge NHCMA grants.</p>
         <p>Use this link to access the judging portal:</p>
         <p><a href="{invite_url}">{invite_url}</a></p>
         <p>If you didn't expect this, you can ignore this message.</p>
     """
-    send_email(judge_email, subject, body_text, body_html)
+    send_email(judge_email, CC_EMAIL, subject, body_html)
+
 
 def _resolve_token(judge_token: str):
     try:
