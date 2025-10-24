@@ -578,29 +578,27 @@ def _create_invite(judge_email: str, full_name: str, days_valid: int = 30) -> st
     return token
     
 def _send_invite(judge_email: str, full_name: str, app_base_url: str | None = None) -> None:
-    """
-    Create an invite token, compose the proper URL, and send the email.
-    Temporary hotfix: force correct host in invite_url to eliminate placeholder links.
-    """
     token = _create_invite(judge_email, full_name)
 
-    # 🔒 Hard-force the correct host (temporary safety net)
+    # Hard-force correct host (hotfix)
     invite_url = f"https://nhcmafoundationgrants.streamlit.app/?invite_token={token}"
 
-    # Optional: visual confirmation in Admin UI (safe; no secrets)
+    subject = "Your NHCMA Judge Invite - TEST OF SCRIPT"
+
+    # 👇 THIS MUST NOT BE COMMENTED OUT
+    body_html = f"""
+        <p>You're invited to judge NHCMA grants.</p>
+        <p><strong>Direct link:</strong> <a href="{invite_url}">{invite_url}</a></p>
+        <p>If you didn't expect this, you can ignore this message.</p>
+    """
+
+    # (optional, for your on-screen confirmation)
     try:
-        st.toast(f"Invite URL generated for {judge_email}: {invite_url}", icon="📩")
+        st.toast(f"Invite URL generated: {invite_url}", icon="🔗")
     except Exception:
         pass
 
-    # ✉️ Send using your existing SMTP helper (to, cc, subject, html)
-    subject = "Your NHCMA Judge Invite"
-    body_html = f"""
-        <p>You're invited to judge NHCMA grants.</p>
-        <p>Use this link to access the judging portal:</p>
-        <p><a href="{invite_url}">{invite_url}</a></p>
-        <p>If you didn't expect this, you can ignore this message.</p>
-    """
+    # Send using your existing SMTP helper (to, cc, subject, html)
     send_email(judge_email, CC_EMAIL, subject, body_html)
 
 
