@@ -801,6 +801,17 @@ with tab3:
             admin_judging_tools(app_base_url=st.secrets.get("APP_BASE_URL", "https://your-app.streamlit.app"))
     else:
         st.stop()
+        
+# --- Judging tab render ---
+if _judging_enabled():
+    try:
+        with tab4:
+            judging_portal()
+    except Exception as e:
+        with tab4:
+            st.error("Judging tab failed to render.")
+            st.exception(e)
+
 
 st.caption("© 2025 New Haven County Medical Association Foundation")
 
