@@ -254,7 +254,9 @@ def _missing_org_fields(org_name, applicant_name, email, project_title):
 # ----------------------------
 def org_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]:
     st.subheader("Organization Application (2025)", anchor="org")
-    st.caption(f\"Submission deadline: **{STU_DEADLINE.strftime('%B %d, %Y at %I:%M %p %Z')}**\n\n_Required fields are marked with *_.\")
+    st.caption(
+    f"Submission deadline: **{ORG_DEADLINE.strftime('%B %d, %Y at %I:%M %p %Z')}**\n\n_Required fields are marked with *_."
+)
 
     disabled = too_late(ORG_DEADLINE)
     if disabled:
@@ -339,7 +341,9 @@ def org_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]:
 
 def student_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]:
     st.subheader("Medical Student Application (2025)", anchor="stu")
-    st.caption("Submission deadline: **October 19, 2025 at 11:59 PM ET**\n\n_Required fields are marked with *_.")
+    st.caption(
+    f"Submission deadline: **{STU_DEADLINE.strftime('%B %d, %Y at %I:%M %p %Z')}**\n\n_Required fields are marked with *_."
+)
 
     disabled = too_late(STU_DEADLINE)
     if disabled:
