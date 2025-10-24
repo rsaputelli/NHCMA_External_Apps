@@ -10,7 +10,6 @@ import secrets
 import pandas as pd
 import streamlit as st
 from supabase import create_client, Client
-from nhcma_booklet_builder import get_supabase, build_all_booklets, make_signed_url, BUCKET_NAME
 
 # --- Build/Version Banner (always visible, no duplicates) ---
 # st.set_page_config(page_title=APP_TITLE, layout="wide", initial_sidebar_state="collapsed")
@@ -550,40 +549,6 @@ def admin_panel():
             key="admin_dl_scoring_xlsx",
             use_container_width=True,
         )
-    # --- Booklet Builder (Admin) ---
-    st.divider()
-    st.subheader("📕 Build Booklets for Judging")
-
-    from nhcma_booklet_builder import (
-        get_supabase,
-        build_all_booklets,
-        make_signed_url,
-        BUCKET_NAME,
-    )
-
-    sb = get_supabase(
-        st.secrets["SUPABASE_URL"],
-        st.secrets["SUPABASE_SERVICE_ROLE_KEY"]
-    )
-
-    col_a, col_b = st.columns([1, 1])
-    with col_a:
-        run_all = st.button("Build ALL Booklets Now", type="primary")
-    with col_b:
-        only_submitted = st.checkbox(
-            "Only rows with status = 'submitted'",
-            value=True
-        )
-
-    where = {"status": "submitted"} if only_submitted else None
-
-    if run_all:
-        with st.spinner("Building DOCX booklets and uploading to Storage..."):
-            report = build_all_booklets(sb, where=where, start_version=1)
-        st.success("Done.")
-        st.dataframe(report)
-
-    st.caption("Tip: you can re-run the build any time after submissions are frozen.")
 
 
 def _judging_enabled() -> bool:
