@@ -1,6 +1,7 @@
+# --- Imports ---
 import os, json, smtplib, io, hashlib, pathlib
 from email.message import EmailMessage
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, Tuple, Optional
 from urllib.parse import urlparse, parse_qs
@@ -10,18 +11,22 @@ import pandas as pd
 import streamlit as st
 from supabase import create_client, Client
 
-# --- Build/Version Banner (verify deployed code) ---
-__APP_VERSION__ = os.environ.get("APP_VERSION", "")           # set in Streamlit env vars (e.g., v2025-10-24-01)
-__COMMIT_SHORT__ = os.environ.get("APP_COMMIT", "")            # optional: set to your Git short SHA
-_sha = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()[:12]
-
-try:
-    st.sidebar.info(f"Build: {__APP_VERSION__ or 'local'} | SHA: {_sha}{(' | Commit: ' + __COMMIT_SHORT__) if __COMMIT_SHORT__ else ''}")
-except Exception:
-    pass  # safe if sidebar not available (tests, headless)
+# --- Build/Version Banner (always visible, no duplicates) ---
+st.set_page_config(layout="wide", initial_sidebar_state="expanded")  # harmless if no sidebar
 
 APP_TITLE = "NHCMA Foundation — 2025 Public Health Innovation Grants"
 TIMEZONE = "America/New_York"
+
+APP_VERSION = os.environ.get("APP_VERSION", "")        # set in Streamlit env vars (optional)
+APP_COMMIT  = os.environ.get("APP_COMMIT", "")         # optional short SHA from git
+SHA12 = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()[:12]
+
+# Show on page body so it’s impossible to miss; sidebar is optional
+st.caption(f"🔧 Build: {APP_VERSION or 'local'} | SHA: {SHA12}{(' | Commit: ' + APP_COMMIT) if APP_COMMIT else ''}")
+try:
+    st.sidebar.info(f"Build: {APP_VERSION or 'local'} | SHA: {SHA12}{(' | Commit: ' + APP_COMMIT) if APP_COMMIT else ''}")
+except Exception:
+    pass
 
 def make_excel(df: pd.DataFrame) -> bytes:
     """Return an .xlsx bytes blob for Streamlit download_button."""
@@ -36,9 +41,9 @@ STU_DEADLINE = datetime(2025, 10, 19, 23, 59, tzinfo=ZoneInfo(TIMEZONE))
 
 # Supabase config
 _sb = st.secrets.get("supabase", {})
-SUPABASE_URL = os.getenv("SUPABASE_URL") or st.secrets.get("SUPABASE_URL") or _sb.get("url")
-SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY") or st.secrets.get("SUPABASE_ANON_KEY") or _sb.get("anon_key")
-BUCKET = os.getenv("SUPABASE_BUCKET") or st.secrets.get("SUPABASE_BUCKET") or _sb.get("bucket", "nhcma-uploads")
+SUPABASE_URL     = os.getenv("SUPABASE_URL")     or st.secrets.get("SUPABASE_URL")     or _sb.get("url")
+SUPABASE_ANON_KEY= os.getenv("SUPABASE_ANON_KEY")or st.secrets.get("SUPABASE_ANON_KEY")or _sb.get("anon_key")
+BUCKET           = os.getenv("SUPABASE_BUCKET")  or st.secrets.get("SUPABASE_BUCKET")  or _sb.get("bucket", "nhcma-uploads")
 
 # Create anon client
 sb: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
@@ -551,25 +556,17 @@ def _judging_enabled() -> bool:
 
 
 # ======== Judging Add-on (self-contained) ========
-def _create_invite(judge_email: str, full_name: str, days_valid: int = 30):
-    j = sb_admin.table("judges").upsert(
-        {"email": judge_email.lower().strip(), "full_name": full_name, "is_active": True},
-        on_conflict="email"
-    ).execute()
+def _create_invite(judge_email: str, full_name: str, days_valid: int = 30) -> str:
+    email = str(judge_email).strip().lower()
+    token = str(secrets.token_urlsafe(32))
+    # Force ISO string with Z
+    expires_at = (datetime.now(timezone.utc) + timedelta(days=days_valid)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    token = secrets.token_urlsafe(32)
+    payload = {"email": email, "token": token, "expires_at": expires_at}
+    json.dumps(payload)  # preflight: will raise TypeError if anything isn't serializable
 
-    # IMPORTANT: make this a STRING, not a datetime or pandas Timestamp
-    expires_at = (datetime.utcnow() + timedelta(days=days_valid)).isoformat(timespec="seconds")
-
-    # extra safety net:
-    assert isinstance(expires_at, str), f"expires_at must be str, got {type(expires_at)}"
-
-    sb_admin.table("judge_invites").insert({
-        "email": judge_email.lower().strip(),
-        "token": token,
-        "expires_at": expires_at
-    }).execute()
+    sb_admin.table("judges").upsert({"email": email, "full_name": str(full_name or "").strip()}, on_conflict="email").execute()
+    sb_admin.table("judge_invites").insert(payload).execute()
     return token
 
 
