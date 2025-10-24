@@ -12,7 +12,7 @@ import streamlit as st
 from supabase import create_client, Client
 
 # --- Build/Version Banner (always visible, no duplicates) ---
-# st.set_page_config(page_title=APP_TITLE, layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(layout="wide", initial_sidebar_state="expanded")  # harmless if no sidebar
 
 APP_TITLE = "NHCMA Foundation — 2025 Public Health Innovation Grants"
 TIMEZONE = "America/New_York"
@@ -22,11 +22,11 @@ APP_COMMIT  = os.environ.get("APP_COMMIT", "")         # optional short SHA from
 SHA12 = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()[:12]
 
 # Show on page body so it’s impossible to miss; sidebar is optional
-# st.caption(f"🔧 Build: {APP_VERSION or 'local'} | SHA: {SHA12}{(' | Commit: ' + APP_COMMIT) if APP_COMMIT else ''}")
-# try:
-    # st.sidebar.info(f"Build: {APP_VERSION or 'local'} | SHA: {SHA12}{(' | Commit: ' + APP_COMMIT) if APP_COMMIT else ''}")
-# except Exception:
-    # pass
+st.caption(f"🔧 Build: {APP_VERSION or 'local'} | SHA: {SHA12}{(' | Commit: ' + APP_COMMIT) if APP_COMMIT else ''}")
+try:
+    st.sidebar.info(f"Build: {APP_VERSION or 'local'} | SHA: {SHA12}{(' | Commit: ' + APP_COMMIT) if APP_COMMIT else ''}")
+except Exception:
+    pass
 
 def make_excel(df: pd.DataFrame) -> bytes:
     """Return an .xlsx bytes blob for Streamlit download_button."""
@@ -36,8 +36,8 @@ def make_excel(df: pd.DataFrame) -> bytes:
         return output.getvalue()
 
 # Deadlines (ET)
-ORG_DEADLINE = datetime(2025, 12, 27, 23, 59, tzinfo=ZoneInfo(TIMEZONE))
-STU_DEADLINE = datetime(2025, 12, 27, 23, 59, tzinfo=ZoneInfo(TIMEZONE))
+ORG_DEADLINE = datetime(2025, 10, 17, 16, 59, tzinfo=ZoneInfo(TIMEZONE))
+STU_DEADLINE = datetime(2025, 10, 19, 23, 59, tzinfo=ZoneInfo(TIMEZONE))
 
 # Supabase config
 _sb = st.secrets.get("supabase", {})
@@ -254,9 +254,7 @@ def _missing_org_fields(org_name, applicant_name, email, project_title):
 # ----------------------------
 def org_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]:
     st.subheader("Organization Application (2025)", anchor="org")
-    st.caption(
-    f"Submission deadline: **{ORG_DEADLINE.strftime('%B %d, %Y at %I:%M %p %Z')}**\n\n_Required fields are marked with *_."
-)
+    st.caption("Submission deadline: **October 17, 2025 at 4:59 PM ET**\n\n_Required fields are marked with *_.")
 
     disabled = too_late(ORG_DEADLINE)
     if disabled:
@@ -341,9 +339,7 @@ def org_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]:
 
 def student_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]:
     st.subheader("Medical Student Application (2025)", anchor="stu")
-    st.caption(
-    f"Submission deadline: **{STU_DEADLINE.strftime('%B %d, %Y at %I:%M %p %Z')}**\n\n_Required fields are marked with *_."
-)
+    st.caption("Submission deadline: **October 19, 2025 at 11:59 PM ET**\n\n_Required fields are marked with *_.")
 
     disabled = too_late(STU_DEADLINE)
     if disabled:
@@ -550,52 +546,6 @@ def admin_panel():
             use_container_width=True,
         )
 
-    # --- Booklet Builder (Admin) ---
-    st.divider()
-    st.subheader("📕 Build Booklets for Judging")
-
-    from nhcma_booklet_builder import (
-        get_supabase,
-        build_all_booklets,
-        make_signed_url,
-        BUCKET_NAME,
-    )
-
-    sb = get_supabase(
-        st.secrets["SUPABASE_URL"],
-        st.secrets["SUPABASE_SERVICE_ROLE_KEY"]
-    )
-
-    col_a, col_b = st.columns([1, 1])
-    with col_a:
-        run_all = st.button("Build ALL Booklets Now", type="primary")
-    with col_b:
-        only_submitted = st.checkbox(
-            "Only rows with status = 'submitted'",
-            value=True
-        )
-
-    where = {"status": "submitted"} if only_submitted else None
-
-    if run_all:
-        # --- DEBUG probes ---
-        st.write("DEBUG – About to run build_all_booklets()", {"where": where})
-        # quick service-role sanity check (remove after):
-        try:
-            _probe = sb.table("submissions").select("id").limit(1).execute()
-            st.write("DEBUG – probe select ok:", _probe)
-        except Exception as e:
-            st.error(f"DEBUG – probe select failed: {e}")
-
-        with st.spinner("Building DOCX booklets and uploading to Storage..."):
-            report = build_all_booklets(sb, where=where, start_version=1)
-
-        st.success("Done.")
-        st.dataframe(report)
-        st.write("DEBUG – report count:", len(report))
-
-    st.caption("Tip: you can re-run the build any time after submissions are frozen.")
-
 
 def _judging_enabled() -> bool:
     """Feature flag for the Judging module. Defaults to True so you can test immediately."""
@@ -637,7 +587,7 @@ def _send_invite(judge_email: str, full_name: str, app_base_url: str | None = No
     # Hard-force correct host (hotfix)
     invite_url = f"https://nhcmafoundationgrants.streamlit.app/?invite_token={token}"
 
-    subject = "Your NHCMA Foundation Judging Link"
+    subject = "Your NHCMA Judge Invite - TEST OF SCRIPT"
 
     # 👇 THIS MUST NOT BE COMMENTED OUT
     body_html = f"""
@@ -646,8 +596,193 @@ def _send_invite(judge_email: str, full_name: str, app_base_url: str | None = No
         <p>If you didn't expect this, you can ignore this message.</p>
     """
 
+    # (optional, for your on-screen confirmation)
+    try:
+        st.toast(f"Invite URL generated: {invite_url}", icon="🔗")
+    except Exception:
+        pass
+
     # Send using your existing SMTP helper (to, cc, subject, html)
     send_email(judge_email, CC_EMAIL, subject, body_html)
+
+
+def _resolve_token(judge_token: str):
+    try:
+        inv = sb_admin.table("judge_invites").select("*").eq("token", judge_token).execute().data
+    except Exception:
+        return None
+    if not inv:
+        return None
+    inv = inv[0]
+    try:
+        judge = sb_admin.table("judges").select("*").eq("email", inv["email"]).single().execute().data
+    except Exception:
+        return None
+    if not judge or not judge.get("is_active"):
+        return None
+    return {"judge_id": judge["id"], "email": judge["email"], "name": judge["full_name"]}
+
+def _scoring_criteria_for_track(track: str):
+    if track == "student":
+        return [
+            ("feasibility",    "Feasibility of Project Completion Within 1 Year (1–5)"),
+            ("alignment",      "Alignment with NHCMA Foundation Mission/Goals (1–5)"),
+            ("community_eval", "Addresses Specific Community Need & Evaluation (1–5)"),
+            ("clarity",        "Clarity & Comprehensiveness (1–5)"),
+            ("budget",         "Budget Appropriateness (1–5)"),
+        ]
+    else:
+        return [
+            ("innovativeness", "Innovativeness (1–5)"),
+            ("feasibility",    "Feasibility of Project Completion Within 1 Year (1–5)"),
+            ("alignment",      "Alignment with NHCMA Foundation Mission/Goals (1–5)"),
+            ("community_eval", "Addresses Specific Community Need & Evaluation (1–5)"),
+            ("clarity",        "Clarity & Comprehensiveness (1–5)"),
+            ("budget",         "Budget Appropriateness (1–5)"),
+        ]
+
+def _score_total(track: str, vals: dict) -> int:
+    keys = [k for k, _ in _scoring_criteria_for_track(track)]
+    return int(sum(int(vals.get(k, 0) or 0) for k in keys))
+
+def judging_portal():
+    # --- visibility + identity debug (always show something) ---
+    st.caption("🧭 Judging portal loaded")
+    who = st.session_state.get("judge_session")
+    if not who:
+        st.info("To access judging, please use your personal invite link. (No judge session detected.)")
+        # Optional: show current query params for troubleshooting
+        try:
+            qp = dict(st.query_params) if hasattr(st, "query_params") else st.experimental_get_query_params()
+            if qp:
+                st.code(f"Query params: {qp}", language="text")
+        except Exception:
+            pass
+        return
+
+    st.markdown(f"**Judge:** {who['name']} ({who['email']})")
+
+    # --- load submissions ---
+    df = load_submissions_df()
+    if df is None or df.empty:
+        st.info("No submissions available yet.")
+        return
+
+    # normalize convenient display columns
+    df["Project Title"] = df.get("Q: project_title", df.get("project_title", ""))
+    df["Org Name"]      = df.get("Q: org_name", df.get("org_name", ""))
+    df["School"]        = df.get("Q: school", df.get("school", ""))
+
+    # --- pick a sensible default track that actually has rows ---
+    tracks_present = [t for t in ["student", "organization"] if t in set(df["track"].dropna().tolist())]
+    if not tracks_present:
+        st.info("Submissions table is present, but no recognized tracks ('student'/'organization') were found.")
+        st.dataframe(df, use_container_width=True)
+        return
+
+    default_track = tracks_present[0]  # choose the first track that has data
+    track = st.radio("Select track", ["student", "organization"], horizontal=True,
+                     index=["student", "organization"].index(default_track))
+
+    sdf = df[df["track"] == track].copy()
+    if sdf.empty:
+        st.info(f"No submissions for the **{track}** track yet.")
+        return
+
+    st.dataframe(
+        sdf[["id","Project Title","Org Name","School","Proposal URL","Budget URL"]].fillna(""),
+        use_container_width=True,
+        column_config={
+            "Proposal URL": st.column_config.LinkColumn("Proposal URL"),
+            "Budget URL":   st.column_config.LinkColumn("Budget URL"),
+        },
+        hide_index=True
+    )
+
+    # submission chooser
+    options = [(int(r["id"]), f"#{int(r['id'])}: {r['Project Title'] or '(untitled)'}") for _, r in sdf.iterrows()]
+    if not options:
+        st.info("No selectable submissions found for this track.")
+        return
+    submission_id = st.selectbox("Choose a submission", options, format_func=lambda t: t[1], index=0)[0]
+
+    # load any previous score by this judge
+    prev = []
+    try:
+        prev = sb_admin.table("scores").select("*").eq("submission_id", submission_id).eq("judge_id", who["judge_id"]).execute().data or []
+    except Exception:
+        prev = []
+    prev = prev[0] if prev else {}
+
+    # criteria per track
+    def _scoring_criteria_for_track(track: str):
+        if track == "student":
+            return [
+                ("feasibility",    "Feasibility of Project Completion Within 1 Year (1–5)"),
+                ("alignment",      "Alignment with NHCMA Foundation Mission/Goals (1–5)"),
+                ("community_eval", "Addresses Specific Community Need & Evaluation (1–5)"),
+                ("clarity",        "Clarity & Comprehensiveness (1–5)"),
+                ("budget",         "Budget Appropriateness (1–5)"),
+            ]
+        else:
+            return [
+                ("innovativeness", "Innovativeness (1–5)"),
+                ("feasibility",    "Feasibility of Project Completion Within 1 Year (1–5)"),
+                ("alignment",      "Alignment with NHCMA Foundation Mission/Goals (1–5)"),
+                ("community_eval", "Addresses Specific Community Need & Evaluation (1–5)"),
+                ("clarity",        "Clarity & Comprehensiveness (1–5)"),
+                ("budget",         "Budget Appropriateness (1–5)"),
+            ]
+
+    def _score_total(track: str, vals: dict) -> int:
+        keys = [k for k, _ in _scoring_criteria_for_track(track)]
+        return int(sum(int(vals.get(k, 0) or 0) for k in keys))
+        
+    # --- Live-scoring widgets (no form) ---
+    st.markdown("### Score this submission")
+
+    # Comments first so it persists between edits
+    comments_key = f"comments_{submission_id}"
+    if comments_key not in st.session_state:
+        st.session_state[comments_key] = prev.get("comments") or ""
+    comments = st.text_area(
+        "Comments (optional, visible to committee)",
+        key=comments_key
+    )
+
+    # Seed and render the scoring inputs
+    vals = {}
+    for key, label in _scoring_criteria_for_track(track):
+        state_key = f"{key}_{submission_id}"
+        if state_key not in st.session_state:
+            st.session_state[state_key] = int(prev.get(key, 3) or 3)
+        vals[key] = st.number_input(
+            label, min_value=1, max_value=5, step=1, key=state_key
+        )
+
+    # Compute total live (updates instantly on any change)
+    live_vals = {k: int(st.session_state[f"{k}_{submission_id}"]) for k, _ in _scoring_criteria_for_track(track)}
+    total = _score_total(track, live_vals)
+    st.metric("Total Points", total)
+
+    # Save current values
+    if st.button("Save Score", type="primary", key=f"save_{submission_id}"):
+        payload = {
+            "submission_id": submission_id,
+            "judge_id": who["judge_id"],
+            "track": track,
+            **live_vals,
+            "total_points": total,
+            "comments": st.session_state[comments_key],
+            "submitted_at": datetime.utcnow().isoformat()
+        }
+        try:
+            sb_admin.table("scores").upsert(payload, on_conflict="submission_id,judge_id").execute()
+            st.success("Score saved.")
+            st.toast("Score saved ✅", icon="✅")
+        except Exception as e:
+            st.error(f"Failed to save: {e}")
+        
 
 def admin_judging_tools(app_base_url: str | None = None):
     st.subheader("Judges & Invites")
@@ -679,11 +814,11 @@ def admin_judging_tools(app_base_url: str | None = None):
 
         # Always show the URL so you can copy/paste to test
         invite_url = f"https://nhcmafoundationgrants.streamlit.app/?invite_token={token}"
-        # st.code(invite_url, language="text")
-        # st.toast("Invite link generated.", icon="🔗") ----Return these if we want to display token when judge is added
+        st.code(invite_url, language="text")
+        st.toast("Invite link generated.", icon="🔗")
 
         if send:
-            subject = "NHCMA Foundation Grants — Your Judge Invite"
+            subject = "NHCMA Grants — Your Judge Invite"
             body_html = f"""
                 <p>You're invited to judge NHCMA grants.</p>
                 <p><strong>Direct link:</strong> <a href="{invite_url}">{invite_url}</a></p>
@@ -794,156 +929,56 @@ def admin_judging_tools(app_base_url: str | None = None):
         )
 
 
-def _resolve_token(judge_token: str):
-    try:
-        inv = sb_admin.table("judge_invites").select("*").eq("token", judge_token).execute().data
-    except Exception:
-        return None
-    if not inv:
-        return None
-    inv = inv[0]
-    try:
-        judge = sb_admin.table("judges").select("*").eq("email", inv["email"]).single().execute().data
-    except Exception:
-        return None
-    if not judge or not judge.get("is_active"):
-        return None
-    return {"judge_id": judge["id"], "email": judge["email"], "name": judge["full_name"]}
 
-def _scoring_criteria_for_track(track: str):
-    if track == "student":
-        return [
-            ("feasibility",    "Feasibility of Project Completion Within 1 Year (1–5)"),
-            ("alignment",      "Alignment with NHCMA Foundation Mission/Goals (1–5)"),
-            ("community_eval", "Addresses Specific Community Need & Evaluation (1–5)"),
-            ("clarity",        "Clarity & Comprehensiveness (1–5)"),
-            ("budget",         "Budget Appropriateness (1–5)"),
-        ]
-    else:
-        return [
-            ("innovativeness", "Innovativeness (1–5)"),
-            ("feasibility",    "Feasibility of Project Completion Within 1 Year (1–5)"),
-            ("alignment",      "Alignment with NHCMA Foundation Mission/Goals (1–5)"),
-            ("community_eval", "Addresses Specific Community Need & Evaluation (1–5)"),
-            ("clarity",        "Clarity & Comprehensiveness (1–5)"),
-            ("budget",         "Budget Appropriateness (1–5)"),
-        ]
+    # --- Validation + actions ---
+    if send or gen_only:
+        name  = (j_name or "").strip()
+        email = (j_email or "").strip().lower()
 
-def _score_total(track: str, vals: dict) -> int:
-    keys = [k for k, _ in _scoring_criteria_for_track(track)]
-    return int(sum(int(vals.get(k, 0) or 0) for k in keys))
+        # minimal email validation
+        if send and (not email or "@" not in email):
+            st.error("Please enter a valid judge email before sending.", icon="❌")
+            return
+        if send and not name:
+            st.warning("No judge name provided — continuing with email only.", icon="⚠️")
 
-def judging_portal():
-    # Require a judge session established via invite link
-    who = st.session_state.get("judge_session")
-    if not who:
-        st.info("To access judging, please use your personal invite link.")
-        return
+        # Create/refresh token row
+        token = _create_invite(email if email else "test@example.com", name or "Judge")
 
-    # Load submissions
-    df = load_submissions_df()
-    if df is None or df.empty:
-        st.info("No submissions available yet.")
-        return
+        # Always show the URL so you can copy/paste to test
+        # (Hard-pin your correct host here)
+        invite_url = f"https://nhcmafoundationgrants.streamlit.app/?invite_token={token}"
+        st.code(invite_url, language="text")
+        st.toast("Invite link generated.", icon="🔗")
 
-    # Normalize display columns
-    df["Project Title"] = df.get("Q: project_title", df.get("project_title", ""))
-    df["Org Name"]      = df.get("Q: org_name", df.get("org_name", ""))
-    df["School"]        = df.get("Q: school", df.get("school", ""))
+        if send:
+            subject = "NHCMA Grants — Your Judge Invite"
+            body_html = f"""
+                <p>You're invited to judge NHCMA grants.</p>
+                <p><strong>Direct link:</strong> <a href="{invite_url}">{invite_url}</a></p>
+                <p>If you didn't expect this, you can ignore this message.</p>
+            """
+            ok = send_email(email, CC_EMAIL, subject, body_html)
+            if ok:
+                st.success(f"Invite sent to {name or email} ({email}).", icon="✅")
+            else:
+                st.error("Email failed to send. You can copy the link above and send manually.", icon="✉️")
 
-    # Pick a default track that actually has rows
-    tracks_present = [t for t in ["student", "organization"] if t in set(df["track"].dropna().tolist())]
-    if not tracks_present:
-        st.info("Submissions table is present, but no recognized tracks ('student'/'organization') were found.")
-        st.dataframe(df, use_container_width=True)
-        return
 
-    default_track = tracks_present[0]
-    track = st.radio("Select track", ["student", "organization"], horizontal=True,
-                     index=["student", "organization"].index(default_track))
+# ----------------------------
+# Header / Main
+# ----------------------------
+st.set_page_config(page_title="NHCMA Grants 2025", layout="wide")
 
-    # Filter to chosen track
-    sdf = df[df["track"] == track].copy()
-    if sdf.empty:
-        st.info(f"No submissions for the **{track}** track yet.")
-        return
-
-    # Show a quick table
-    st.dataframe(
-        sdf[["id","Project Title","Org Name","School","Proposal URL","Budget URL"]].fillna(""),
-        use_container_width=True,
-        column_config={
-            "Proposal URL": st.column_config.LinkColumn("Proposal URL"),
-            "Budget URL":   st.column_config.LinkColumn("Budget URL"),
-        },
-        hide_index=True
-    )
-
-    # Submission chooser
-    options = [(int(r["id"]), f"#{int(r['id'])}: {r['Project Title'] or '(untitled)'}") for _, r in sdf.iterrows()]
-    if not options:
-        st.info("No selectable submissions found for this track.")
-        return
-    submission_id = st.selectbox("Choose a submission", options, format_func=lambda t: t[1], index=0)[0]
-
-    # Load any previous score by this judge
-    prev = []
-    try:
-        prev = sb_admin.table("scores").select("*") \
-            .eq("submission_id", submission_id).eq("judge_id", who["judge_id"]).execute().data or []
-    except Exception:
-        prev = []
-    prev = prev[0] if prev else {}
-
-    # ---- Live-scoring block (no form) ----
-    st.markdown("### Score this submission")
-
-    # Comments persist per submission
-    comments_key = f"comments_{submission_id}"
-    if comments_key not in st.session_state:
-        st.session_state[comments_key] = prev.get("comments") or ""
-    comments = st.text_area("Comments (optional, visible to committee)", key=comments_key)
-
-    # Scoring inputs
-    for key, label in _scoring_criteria_for_track(track):
-        state_key = f"{key}_{submission_id}"
-        if state_key not in st.session_state:
-            st.session_state[state_key] = int(prev.get(key, 3) or 3)
-        st.number_input(label, min_value=1, max_value=5, step=1, key=state_key)
-
-    # Compute total live (updates instantly on any change)
-    live_vals = {k: int(st.session_state[f"{k}_{submission_id}"]) for k, _ in _scoring_criteria_for_track(track)}
-    total = _score_total(track, live_vals)
-    st.metric("Total Points", total)
-
-    # Save current values
-    if st.button("Save Score", type="primary", key=f"save_{submission_id}"):
-        payload = {
-            "submission_id": submission_id,
-            "judge_id": who["judge_id"],
-            "track": track,
-            **live_vals,
-            "total_points": total,
-            "comments": st.session_state[comments_key],
-            "submitted_at": datetime.utcnow().isoformat()
-        }
-        try:
-            sb_admin.table("scores").upsert(payload, on_conflict="submission_id,judge_id").execute()
-            st.success("Score saved.")
-            st.toast("Score saved ✅", icon="✅")
-        except Exception as e:
-            st.error(f"Failed to save: {e}")
-            
 # --- Early invite-token resolver (runs before UI) ---
 def _consume_invite_from_query():
-    """If a URL contains ?invite_token=..., resolve it and store judge_session,
-    then clear the query string and rerun once."""
+    st.toast("Invite resolver running...", icon="🕵️")   # <--- debug line 1
     try:
         params = dict(st.query_params) if hasattr(st, "query_params") else st.experimental_get_query_params()
+        st.toast(f"Query params: {params}", icon="🔍")   # <--- debug line 2
         token = None
         if params:
-            raw = params.get("invite_token")
-            token = (raw[0] if isinstance(raw, list) else raw) or None
+            token = (params.get("invite_token") or [None])[0] if isinstance(params.get("invite_token"), list) else params.get("invite_token")
         if not token:
             return
 
@@ -953,23 +988,19 @@ def _consume_invite_from_query():
             return
 
         st.session_state["judge_session"] = who
+        st.toast(f"Welcome, {who['name']} — judging unlocked.", icon="✅")
 
         try:
-            if hasattr(st, "query_params"):
-                st.query_params.clear()
+            st.query_params.clear()
         except Exception:
             pass
-
         st.rerun()
     except Exception as e:
         st.error("Could not process invite. Please try again.")
         st.exception(e)
 
-# Run resolver before any UI renders
+
 _consume_invite_from_query()
-
-# Header with logo + title
-
 
 
 # Header with logo + title
@@ -1054,3 +1085,4 @@ if _judging_enabled():
 
 
 st.caption("© 2025 New Haven County Medical Association Foundation")
+
