@@ -565,10 +565,17 @@ def _create_invite(judge_email: str, full_name: str, days_valid: int = 30) -> st
     payload = {"email": email, "token": token, "expires_at": expires_at}
     json.dumps(payload)  # preflight: will raise TypeError if anything isn't serializable
 
-    sb_admin.table("judges").upsert({"email": email, "full_name": str(full_name or "").strip()}, on_conflict="email").execute()
-    sb_admin.table("judge_invites").insert(payload).execute()
-    return token
+    sb_admin.table("judges").upsert(
+        {"email": email, "full_name": str(full_name or "").strip()},
+        on_conflict="email"
+    ).execute()
 
+    sb_admin.table("judge_invites").upsert(
+        payload,                    # {"email": email, "token": token, "expires_at": expires_at}
+        on_conflict="email"         # replaces existing row for this email
+    ).execute()
+
+    return token
 
 def _send_invite(judge_email: str, full_name: str, app_base_url: str | None = None) -> None:
     """
@@ -580,16 +587,30 @@ def _send_invite(judge_email: str, full_name: str, app_base_url: str | None = No
     # Always resolve base from secrets unless caller forces override
     base = (app_base_url or st.secrets.get("APP_BASE_URL") or "").strip()
     if not base:
-        # last-resort fallback (use your real domain, not the placeholder)
         base = "https://nhcmafoundationgrants.streamlit.app"
 
-    invite_url = f"{base.rstrip('/')}/?invite_token={token}"  # use invite_token (new canonical key)
+    invite_url = f"{base.rstrip('/')}/?invite_token={token}"  # canonical key
 
-    # (Optional) show a one-time debug line in the UI so we can verify quickly
-    st.toast(f"Invite URL generated for {judge_email}: {invite_url}", icon="📩")
+    # Optional: visual confirmation in Admin UI
+    try:
+        st.toast(f"Invite URL generated for {judge_email}: {invite_url}", icon="📩")
+    except Exception:
+        pass
 
-    # send the email body that includes invite_url...
-    # build your EmailMessage here using invite_url (plain or html)
+    # --- actually send the email (no SMTP changes) ---
+    subject = "Your NHCMA Judge Invite"
+    body_text = (
+        "You're invited to judge NHCMA grants.\n\n"
+        f"Use this link to access the judging portal:\n{invite_url}\n\n"
+        "If you didn't expect this, you can ignore this message."
+    )
+    body_html = f"""
+        <p>You're invited to judge NHCMA grants.</p>
+        <p>Use this link to access the judging portal:</p>
+        <p><a href="{invite_url}">{invite_url}</a></p>
+        <p>If you didn't expect this, you can ignore this message.</p>
+    """
+    send_email(judge_email, subject, body_text, body_html)
 
 def _resolve_token(judge_token: str):
     try:
