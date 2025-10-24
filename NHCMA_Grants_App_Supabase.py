@@ -591,7 +591,8 @@ def _send_invite(judge_email: str, full_name: str, app_base_url: str | None = No
 
     # ✅ Canonical: invite_token query param
     invite_url = f"{base.rstrip('/')}/?invite_token={token}"
-
+    if "your-app.streamlit.app" in invite_url:
+    invite_url = invite_url.replace("your-app.streamlit.app", "nhcmafoundationgrants.streamlit.app")
     # Optional: visual confirmation in Admin UI
     try:
         st.toast(f"Invite URL generated for {judge_email}: {invite_url}", icon="📩")
@@ -835,7 +836,7 @@ with tab3:
         if _judging_enabled():
             st.divider()
             st.caption("Judging — Invites & Tally")
-            admin_judging_tools(app_base_url=st.secrets.get("APP_BASE_URL"))
+            admin_judging_tools()
     else:
         st.stop()
         
