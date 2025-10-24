@@ -1,6 +1,6 @@
 import os, json, smtplib
 from email.message import EmailMessage
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, Tuple, Optional
 import secrets
@@ -547,15 +547,22 @@ def _create_invite(judge_email: str, full_name: str, days_valid: int = 30):
         {"email": judge_email.lower().strip(), "full_name": full_name, "is_active": True},
         on_conflict="email"
     ).execute()
+
     token = secrets.token_urlsafe(32)
-    # Use UTC now for expires_at if ZoneInfo not available earlier in file
-    expires_at = datetime.utcnow().replace(tzinfo=None) + pd.Timedelta(days=days_valid)
-    res = sb_admin.table("judge_invites").insert({
+
+    # IMPORTANT: make this a STRING, not a datetime or pandas Timestamp
+    expires_at = (datetime.utcnow() + timedelta(days=days_valid)).isoformat(timespec="seconds")
+
+    # extra safety net:
+    assert isinstance(expires_at, str), f"expires_at must be str, got {type(expires_at)}"
+
+    sb_admin.table("judge_invites").insert({
         "email": judge_email.lower().strip(),
         "token": token,
         "expires_at": expires_at
     }).execute()
     return token
+
 
 def _send_invite(judge_email: str, full_name: str, app_base_url: str):
     token = _create_invite(judge_email, full_name)
