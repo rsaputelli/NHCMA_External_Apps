@@ -12,7 +12,7 @@ import streamlit as st
 from supabase import create_client, Client
 
 # --- Build/Version Banner (always visible, no duplicates) ---
-st.set_page_config(layout="wide", initial_sidebar_state="expanded")  # harmless if no sidebar
+st.set_page_config(page_title=APP_TITLE, layout="wide", initial_sidebar_state="collapsed")
 
 APP_TITLE = "NHCMA Foundation — 2025 Public Health Innovation Grants"
 TIMEZONE = "America/New_York"
@@ -22,11 +22,11 @@ APP_COMMIT  = os.environ.get("APP_COMMIT", "")         # optional short SHA from
 SHA12 = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()[:12]
 
 # Show on page body so it’s impossible to miss; sidebar is optional
-st.caption(f"🔧 Build: {APP_VERSION or 'local'} | SHA: {SHA12}{(' | Commit: ' + APP_COMMIT) if APP_COMMIT else ''}")
-try:
-    st.sidebar.info(f"Build: {APP_VERSION or 'local'} | SHA: {SHA12}{(' | Commit: ' + APP_COMMIT) if APP_COMMIT else ''}")
-except Exception:
-    pass
+# st.caption(f"🔧 Build: {APP_VERSION or 'local'} | SHA: {SHA12}{(' | Commit: ' + APP_COMMIT) if APP_COMMIT else ''}")
+# try:
+    # st.sidebar.info(f"Build: {APP_VERSION or 'local'} | SHA: {SHA12}{(' | Commit: ' + APP_COMMIT) if APP_COMMIT else ''}")
+# except Exception:
+    # pass
 
 def make_excel(df: pd.DataFrame) -> bytes:
     """Return an .xlsx bytes blob for Streamlit download_button."""
@@ -633,11 +633,11 @@ def admin_judging_tools(app_base_url: str | None = None):
 
         # Always show the URL so you can copy/paste to test
         invite_url = f"https://nhcmafoundationgrants.streamlit.app/?invite_token={token}"
-        st.code(invite_url, language="text")
-        st.toast("Invite link generated.", icon="🔗")
+        # st.code(invite_url, language="text")
+        # st.toast("Invite link generated.", icon="🔗") ----Return these if we want to display token when judge is added
 
         if send:
-            subject = "NHCMA Grants — Your Judge Invite"
+            subject = "NHCMA Foundation Grants — Your Judge Invite"
             body_html = f"""
                 <p>You're invited to judge NHCMA grants.</p>
                 <p><strong>Direct link:</strong> <a href="{invite_url}">{invite_url}</a></p>
