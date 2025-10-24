@@ -835,7 +835,7 @@ with tab3:
         if _judging_enabled():
             st.divider()
             st.caption("Judging — Invites & Tally")
-            admin_judging_tools(app_base_url=st.secrets.get("APP_BASE_URL", "https://your-app.streamlit.app"))
+            admin_judging_tools(app_base_url=st.secrets.get("APP_BASE_URL"))
     else:
         st.stop()
         
