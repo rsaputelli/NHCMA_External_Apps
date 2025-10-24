@@ -116,7 +116,16 @@ def update_submission_paths(sb: Client, submission_id: Any, path_docx: str, vers
 
 def upload_bytes(sb: Client, bucket: str, path: str, data: bytes, content_type: str) -> None:
     storage = sb.storage.from_(bucket)
-    storage.upload(path=path, file=data, file_options={"content-type": content_type, "upsert": True})
+    # supabase-py expects "contentType" (camelCase) and returns a dict on success
+    resp = storage.upload(
+        path=path,
+        file=data,
+        file_options={"contentType": content_type, "upsert": True},
+    )
+    # Basic sanity check: raise if error-like payload returned
+    if isinstance(resp, dict) and resp.get("error"):
+        raise RuntimeError(f"Storage upload failed: {resp['error']}")
+
 
 
 def make_signed_url(sb: Client, bucket: str, path: str, expires_in_seconds: int = 86400) -> str:

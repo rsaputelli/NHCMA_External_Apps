@@ -592,6 +592,9 @@ def admin_panel():
 
         st.success("Done.")
         st.dataframe(report)
+        ok = sum(1 for r in report if r.get("status") == "ok")
+        err = sum(1 for r in report if r.get("status") == "error")
+        st.write(f"Built {ok} OK / {err} errors")
         st.write("DEBUG – report count:", len(report))
 
     st.caption("Tip: you can re-run the build any time after submissions are frozen.")
