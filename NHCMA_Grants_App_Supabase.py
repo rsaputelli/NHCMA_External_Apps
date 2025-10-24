@@ -12,7 +12,7 @@ import streamlit as st
 from supabase import create_client, Client
 
 # --- Build/Version Banner (always visible, no duplicates) ---
-st.set_page_config(page_title=APP_TITLE, layout="wide", initial_sidebar_state="collapsed")
+# st.set_page_config(page_title=APP_TITLE, layout="wide", initial_sidebar_state="collapsed")
 
 APP_TITLE = "NHCMA Foundation — 2025 Public Health Innovation Grants"
 TIMEZONE = "America/New_York"
