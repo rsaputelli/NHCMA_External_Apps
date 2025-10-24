@@ -576,24 +576,18 @@ def _create_invite(judge_email: str, full_name: str, days_valid: int = 30) -> st
     ).execute()
 
     return token
-
+    
 def _send_invite(judge_email: str, full_name: str, app_base_url: str | None = None) -> None:
     """
     Create an invite token, compose the proper URL, and send the email.
-    Always pulls the base URL from secrets unless an explicit override is provided.
+    Temporary hotfix: force correct host in invite_url to eliminate placeholder links.
     """
     token = _create_invite(judge_email, full_name)
 
-    # Always resolve base from secrets unless caller forces override
-    base = (app_base_url or st.secrets.get("APP_BASE_URL") or "").strip()
-    if not base:
-        base = "https://nhcmafoundationgrants.streamlit.app"
+    # 🔒 Hard-force the correct host (temporary safety net)
+    invite_url = f"https://nhcmafoundationgrants.streamlit.app/?invite_token={token}"
 
-    # ✅ Canonical: invite_token query param
-    invite_url = f"{base.rstrip('/')}/?invite_token={token}"
-    if "your-app.streamlit.app" in invite_url:
-    invite_url = invite_url.replace("your-app.streamlit.app", "nhcmafoundationgrants.streamlit.app")
-    # Optional: visual confirmation in Admin UI
+    # Optional: visual confirmation in Admin UI (safe; no secrets)
     try:
         st.toast(f"Invite URL generated for {judge_email}: {invite_url}", icon="📩")
     except Exception:
