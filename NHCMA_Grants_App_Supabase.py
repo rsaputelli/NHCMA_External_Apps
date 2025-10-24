@@ -763,6 +763,36 @@ def admin_judging_tools(app_base_url: str | None = None):
 # ----------------------------
 st.set_page_config(page_title="NHCMA Grants 2025", layout="wide")
 
+# --- Early invite-token resolver (runs before UI) ---
+def _consume_invite_from_query():
+    try:
+        params = dict(st.query_params) if hasattr(st, "query_params") else st.experimental_get_query_params()
+        token = None
+        if params:
+            token = (params.get("invite_token") or [None])[0] if isinstance(params.get("invite_token"), list) else params.get("invite_token")
+        if not token:
+            return
+
+        who = _resolve_token(token)
+        if not who:
+            st.warning("Invite link invalid or expired.")
+            return
+
+        st.session_state["judge_session"] = who
+        st.toast(f"Welcome, {who['name']} — judging unlocked.", icon="✅")
+
+        try:
+            st.query_params.clear()
+        except Exception:
+            pass
+        st.rerun()
+    except Exception as e:
+        st.error("Could not process invite. Please try again.")
+        st.exception(e)
+
+_consume_invite_from_query()
+
+
 # Header with logo + title
 col_logo, col_title = st.columns([1, 5], vertical_alignment="center")
 with col_logo:
