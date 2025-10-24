@@ -720,7 +720,7 @@ def judging_portal():
         except Exception as e:
             st.error(f"Failed to save: {e}")
 
-def admin_judging_tools(app_base_url: str):
+def admin_judging_tools(app_base_url: str | None = None):
     st.subheader("Judges & Invites")
     with st.form("invite_form", clear_on_submit=True):
         j_name = st.text_input("Judge Name")
