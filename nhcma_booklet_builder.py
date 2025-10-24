@@ -92,11 +92,16 @@ def get_supabase(url: str, key: str) -> Client:
 
 def list_submissions(sb: Client, where: Dict[str, Any] | None = None) -> List[Dict[str, Any]]:
     q = sb.table(TABLE_NAME).select("*")
-    if where:
-        for k, v in where.items():
-            q = q.eq(k, v)
+    # only apply filters if explicitly requested and column likely exists
+    if where and isinstance(where, dict):
+        try:
+            for k, v in where.items():
+                q = q.eq(k, v)
+        except Exception:
+            pass  # if the column doesn't exist, just skip filter
     res = q.execute()
     return res.data or []
+
 
 
 def update_submission_paths(sb: Client, submission_id: Any, path_docx: str, version: int | None = None) -> None:
