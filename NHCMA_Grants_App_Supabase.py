@@ -726,41 +726,50 @@ def judging_portal():
 
 def admin_judging_tools(app_base_url: str | None = None):
     st.subheader("Judges & Invites")
-    with st.form("invite_form", clear_on_submit=True):
-        j_name = st.text_input("Judge Name")
-        j_email = st.text_input("Judge Email")
-        send = st.form_submit_button("Send Invite")
-    if send:
-        _send_invite(j_email, j_name, app_base_url)
-        st.success(f"Invite sent to {j_name} ({j_email}).")
 
-    st.subheader("Scoring Tally")
-    try:
-        s = sb_admin.table("scores").select("*").execute().data or []
-        sc = pd.DataFrame(s)
-    except Exception:
-        sc = pd.DataFrame()
+    with st.form("invite_form", clear_on_submit=False):
+        j_name  = st.text_input("Judge Name", key="judge_name")
+        j_email = st.text_input("Judge Email", key="judge_email", placeholder="name@example.com")
+        colA, colB = st.columns(2)
+        with colA:
+            send = st.form_submit_button("Send Invite")
+        with colB:
+            gen_only = st.form_submit_button("Generate Link (no email)")  # test without SMTP
 
-    subs = load_submissions_df()
-    if sc.empty or subs is None or subs.empty:
-        st.info("No scores yet.")
-        return
-    merged = sc.merge(
-        subs[["id","track","Q: project_title","Q: org_name","Q: school"]].rename(
-            columns={"Q: project_title":"Project Title","Q: org_name":"Org Name","Q: school":"School"}
-        ),
-        left_on=["submission_id","track"], right_on=["id","track"], how="left"
-    )
-    agg = (merged.groupby(["track","submission_id","Project Title","Org Name","School"])
-                 .agg(avg_total=("total_points","mean"),
-                      n_scores=("total_points","count"))
-                 .reset_index()
-                 .sort_values(["track","avg_total","n_scores"], ascending=[True, False, False]))
-    st.dataframe(agg, use_container_width=True)
-    st.download_button("Download Tally (CSV)",
-                       agg.to_csv(index=False).encode("utf-8"),
-                       "nhcma_scoring_tally.csv",
-                       "text/csv")
+    # --- Validation + actions ---
+    if send or gen_only:
+        name  = (j_name or "").strip()
+        email = (j_email or "").strip().lower()
+
+        # minimal email validation
+        if send and (not email or "@" not in email):
+            st.error("Please enter a valid judge email before sending.", icon="❌")
+            return
+        if send and not name:
+            st.warning("No judge name provided — continuing with email only.", icon="⚠️")
+
+        # Create/refresh token row
+        token = _create_invite(email if email else "test@example.com", name or "Judge")
+
+        # Always show the URL so you can copy/paste to test
+        # (Hard-pin your correct host here)
+        invite_url = f"https://nhcmafoundationgrants.streamlit.app/?invite_token={token}"
+        st.code(invite_url, language="text")
+        st.toast("Invite link generated.", icon="🔗")
+
+        if send:
+            subject = "NHCMA Grants — Your Judge Invite"
+            body_html = f"""
+                <p>You're invited to judge NHCMA grants.</p>
+                <p><strong>Direct link:</strong> <a href="{invite_url}">{invite_url}</a></p>
+                <p>If you didn't expect this, you can ignore this message.</p>
+            """
+            ok = send_email(email, CC_EMAIL, subject, body_html)
+            if ok:
+                st.success(f"Invite sent to {name or email} ({email}).", icon="✅")
+            else:
+                st.error("Email failed to send. You can copy the link above and send manually.", icon="✉️")
+
 
 # ----------------------------
 # Header / Main
