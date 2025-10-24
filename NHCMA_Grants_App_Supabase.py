@@ -650,24 +650,106 @@ def _score_total(track: str, vals: dict) -> int:
     return int(sum(int(vals.get(k, 0) or 0) for k in keys))
 
 def judging_portal():
-    # --- visibility + identity debug (always show something) ---
+    # Require a judge session established via invite link
     who = st.session_state.get("judge_session")
     if not who:
-    st.info("To access judging, please use your personal invite link.")
-    return
+        st.info("To access judging, please use your personal invite link.")
+        return
 
+    # Load submissions
+    df = load_submissions_df()
+    if df is None or df.empty:
+        st.info("No submissions available yet.")
+        return
 
-        st.session_state["judge_session"] = who
+    # Normalize display columns
+    df["Project Title"] = df.get("Q: project_title", df.get("project_title", ""))
+    df["Org Name"]      = df.get("Q: org_name", df.get("org_name", ""))
+    df["School"]        = df.get("Q: school", df.get("school", ""))
 
-        # Clear the query string and rerun once the session is set
+    # Pick a default track that actually has rows
+    tracks_present = [t for t in ["student", "organization"] if t in set(df["track"].dropna().tolist())]
+    if not tracks_present:
+        st.info("Submissions table is present, but no recognized tracks ('student'/'organization') were found.")
+        st.dataframe(df, use_container_width=True)
+        return
+
+    default_track = tracks_present[0]
+    track = st.radio("Select track", ["student", "organization"], horizontal=True,
+                     index=["student", "organization"].index(default_track))
+
+    # Filter to chosen track
+    sdf = df[df["track"] == track].copy()
+    if sdf.empty:
+        st.info(f"No submissions for the **{track}** track yet.")
+        return
+
+    # Show a quick table
+    st.dataframe(
+        sdf[["id","Project Title","Org Name","School","Proposal URL","Budget URL"]].fillna(""),
+        use_container_width=True,
+        column_config={
+            "Proposal URL": st.column_config.LinkColumn("Proposal URL"),
+            "Budget URL":   st.column_config.LinkColumn("Budget URL"),
+        },
+        hide_index=True
+    )
+
+    # Submission chooser
+    options = [(int(r["id"]), f"#{int(r['id'])}: {r['Project Title'] or '(untitled)'}") for _, r in sdf.iterrows()]
+    if not options:
+        st.info("No selectable submissions found for this track.")
+        return
+    submission_id = st.selectbox("Choose a submission", options, format_func=lambda t: t[1], index=0)[0]
+
+    # Load any previous score by this judge
+    prev = []
+    try:
+        prev = sb_admin.table("scores").select("*") \
+            .eq("submission_id", submission_id).eq("judge_id", who["judge_id"]).execute().data or []
+    except Exception:
+        prev = []
+    prev = prev[0] if prev else {}
+
+    # ---- Live-scoring block (no form) ----
+    st.markdown("### Score this submission")
+
+    # Comments persist per submission
+    comments_key = f"comments_{submission_id}"
+    if comments_key not in st.session_state:
+        st.session_state[comments_key] = prev.get("comments") or ""
+    comments = st.text_area("Comments (optional, visible to committee)", key=comments_key)
+
+    # Scoring inputs
+    for key, label in _scoring_criteria_for_track(track):
+        state_key = f"{key}_{submission_id}"
+        if state_key not in st.session_state:
+            st.session_state[state_key] = int(prev.get(key, 3) or 3)
+        st.number_input(label, min_value=1, max_value=5, step=1, key=state_key)
+
+    # Compute total live (updates instantly on any change)
+    live_vals = {k: int(st.session_state[f"{k}_{submission_id}"]) for k, _ in _scoring_criteria_for_track(track)}
+    total = _score_total(track, live_vals)
+    st.metric("Total Points", total)
+
+    # Save current values
+    if st.button("Save Score", type="primary", key=f"save_{submission_id}"):
+        payload = {
+            "submission_id": submission_id,
+            "judge_id": who["judge_id"],
+            "track": track,
+            **live_vals,
+            "total_points": total,
+            "comments": st.session_state[comments_key],
+            "submitted_at": datetime.utcnow().isoformat()
+        }
         try:
-            st.query_params.clear()
-        except Exception:
-            pass
-        st.rerun()
-    except Exception as e:
-        st.error("Could not process invite. Please try again.")
-        st.exception(e)
+            sb_admin.table("scores").upsert(payload, on_conflict="submission_id,judge_id").execute()
+            st.success("Score saved.")
+            st.toast("Score saved ✅", icon="✅")
+        except Exception as e:
+            st.error(f"Failed to save: {e}")
+
 _consume_invite_from_query()
 
 
