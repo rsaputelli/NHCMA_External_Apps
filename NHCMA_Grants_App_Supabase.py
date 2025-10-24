@@ -894,6 +894,25 @@ def judging_portal():
         st.info("No selectable submissions found for this track.")
         return
     submission_id = st.selectbox("Choose a submission", options, format_func=lambda t: t[1], index=0)[0]
+    
+    # --- Booklet download (DOCX) for this submission ---
+    from nhcma_booklet_builder import get_supabase, make_signed_url, BUCKET_NAME
+
+    sb_srv = get_supabase(
+        st.secrets["SUPABASE_URL"],
+        st.secrets["SUPABASE_SERVICE_ROLE_KEY"],
+    )
+
+    # Locate this submission's row to get the stored booklet path
+    selected_row = sdf.loc[sdf["id"] == submission_id].iloc[0]
+    path = selected_row.get("booklet_docx_path")
+
+    if path and str(path).strip().lower() not in {"", "none", "null"}:
+        url = make_signed_url(sb_srv, BUCKET_NAME, path, expires_in_seconds=24*3600)
+        st.link_button("⬇️ Download Booklet (DOCX)", url, use_container_width=True)
+    else:
+        st.info("No booklet for this submission yet.")
+
 
     # Load any previous score by this judge
     prev = []
