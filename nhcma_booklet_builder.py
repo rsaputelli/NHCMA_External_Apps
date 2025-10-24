@@ -235,21 +235,15 @@ def build_booklet_docx(submission_row: Dict[str, Any]) -> bytes:
         doc.add_paragraph("")
 
     # --- Attachments Section ---
-    ATTACHMENT_KEYS = ["proposal", "budget", "other", "cv", "support_letter"]
+    uploads = row.get("uploads_json") or {}
     doc.add_heading("Attachments", level=2)
-    for key in ATTACHMENT_KEYS:
-        # Skip CV/support letter for org track
-        if str(track).lower().startswith("org") and key in ("cv", "support_letter"):
-            continue
-        url = uploads.get(key) or payload.get(key)
-        label = key.replace("_", " ").title()
-        para = doc.add_paragraph()
-        run = para.add_run(f"{label}: ")
-        run.bold = True
-        if url:
-            para.add_run(url)
-        else:
-            para.add_run("—")
+    if any(k in uploads for k in ["proposal", "budget", "cv", "support_letter", "other"]):
+        for k, v in uploads.items():
+            if isinstance(v, str) and v.startswith("https://"):
+                doc.add_paragraph(f"{human_label(k)}: {v}")
+    else:
+        doc.add_paragraph("No attachments uploaded.")
+
 
 
     # Optional: dump any extra fields not covered above under an Appendix
