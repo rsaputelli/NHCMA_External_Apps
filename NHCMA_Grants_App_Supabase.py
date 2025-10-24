@@ -918,8 +918,9 @@ with tab3:
             st.caption("Judging — Invites & Tally")
             admin_judging_tools()
     else:
-        st.stop()
-        
+        st.info("Admin locked. Enter the admin password above to view Admin tools.")
+        # Do NOT st.stop(); allow Judging tab to render
+
 # --- Judging tab render ---
 if _judging_enabled():
     try:
