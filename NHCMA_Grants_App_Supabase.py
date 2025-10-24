@@ -888,41 +888,42 @@ def judging_portal():
         except Exception as e:
             st.error(f"Failed to save: {e}")
             
-    # --- Early invite-token resolver (runs before UI) ---
-    def _consume_invite_from_query():
-        """If a URL contains ?invite_token=..., resolve it and store judge_session,
-        then clear the query string and rerun once."""
+# --- Early invite-token resolver (runs before UI) ---
+def _consume_invite_from_query():
+    """If a URL contains ?invite_token=..., resolve it and store judge_session,
+    then clear the query string and rerun once."""
+    try:
+        params = dict(st.query_params) if hasattr(st, "query_params") else st.experimental_get_query_params()
+        token = None
+        if params:
+            raw = params.get("invite_token")
+            token = (raw[0] if isinstance(raw, list) else raw) or None
+        if not token:
+            return
+
+        who = _resolve_token(token)
+        if not who:
+            st.warning("Invite link invalid or expired.")
+            return
+
+        st.session_state["judge_session"] = who
+
         try:
-            # support both new and old Streamlit APIs
-            params = dict(st.query_params) if hasattr(st, "query_params") else st.experimental_get_query_params()
-            token = None
-            if params:
-                raw = params.get("invite_token")
-                token = (raw[0] if isinstance(raw, list) else raw) or None
-            if not token:
-                return
+            if hasattr(st, "query_params"):
+                st.query_params.clear()
+        except Exception:
+            pass
 
-            who = _resolve_token(token)
-            if not who:
-                st.warning("Invite link invalid or expired.")
-                return
+        st.rerun()
+    except Exception as e:
+        st.error("Could not process invite. Please try again.")
+        st.exception(e)
 
-            st.session_state["judge_session"] = who
-
-            # Clear the query string and rerun once the session is set
-            try:
-                if hasattr(st, "query_params"):
-                    st.query_params.clear()
-            except Exception:
-                pass
-
-            st.rerun()
-        except Exception as e:
-            st.error("Could not process invite. Please try again.")
-            st.exception(e)
-
-
+# Run resolver before any UI renders
 _consume_invite_from_query()
+
+# Header with logo + title
+
 
 
 # Header with logo + title
