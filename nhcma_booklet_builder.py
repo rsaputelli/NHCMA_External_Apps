@@ -234,6 +234,24 @@ def build_booklet_docx(submission_row: Dict[str, Any]) -> bytes:
                 para.add_run(pretty)
         doc.add_paragraph("")
 
+    # --- Attachments Section ---
+    ATTACHMENT_KEYS = ["proposal", "budget", "other", "cv", "support_letter"]
+    doc.add_heading("Attachments", level=2)
+    for key in ATTACHMENT_KEYS:
+        # Skip CV/support letter for org track
+        if str(track).lower().startswith("org") and key in ("cv", "support_letter"):
+            continue
+        url = uploads.get(key) or payload.get(key)
+        label = key.replace("_", " ").title()
+        para = doc.add_paragraph()
+        run = para.add_run(f"{label}: ")
+        run.bold = True
+        if url:
+            para.add_run(url)
+        else:
+            para.add_run("—")
+
+
     # Optional: dump any extra fields not covered above under an Appendix
     covered = {k for _, lst in sections for k in lst}
     extra_keys = sorted(set(payload.keys()) - {k.split(".")[0] for k in covered})
