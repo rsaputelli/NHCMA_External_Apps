@@ -19,36 +19,38 @@ from urllib.parse import quote
 PROJECT_REF = "icjunpjliexaacexjgwy"  # your Supabase project ref
 EDGE_BASE   = f"https://{PROJECT_REF}.supabase.co/functions/v1"
 
-def _bucket_and_key_from_url(u: str) -> tuple[str, str]:
-    """
-    Accepts either a full Storage URL (public/sign) or a bare object key.
-    Returns (bucket, key).
-    """
-    if isinstance(u, str) and u.startswith("http"):
-        # /storage/v1/object/public/{bucket}/{key...}
-        marker = "/storage/v1/object/public/"
-        if marker in u:
-            rest = u.split(marker, 1)[1].split("?", 1)[0]
-            bucket, _, key = rest.partition("/")
-            return bucket, key
-
-        # /storage/v1/object/sign/{bucket}/{key...}
-        marker = "/storage/v1/object/sign/"
-        if marker in u:
-            rest = u.split(marker, 1)[1].split("?", 1)[0]
-            bucket, _, key = rest.partition("/")
-            return bucket, key
-
-    # Otherwise treat input as an object key in the uploads bucket
-    return "nhcma-uploads", u.lstrip("/")
-
-
 def edge_signed_download_url(bucket: str, path: str) -> str:
-    """
-    Build the Edge Function URL that signs & redirects to Storage.
-    Keeps slashes, encodes spaces, etc.
-    """
     return f"{EDGE_BASE}/signed-download?bucket={quote(bucket)}&path={quote(path, safe='/')}"
+
+def _bucket_and_key_from_url(u: str) -> tuple[str, str]:
+    if isinstance(u, str) and u.startswith("http"):
+        m = "/storage/v1/object/public/"
+        if m in u:
+            rest = u.split(m, 1)[1].split("?", 1)[0]
+            bucket, _, key = rest.partition("/")
+            return bucket, key
+        m = "/storage/v1/object/sign/"
+        if m in u:
+            rest = u.split(m, 1)[1].split("?", 1)[0]
+            bucket, _, key = rest.partition("/")
+            return bucket, key
+    return "nhcma-uploads", (u or "").lstrip("/")
+
+def _ensure_dict(payload_json):
+    if isinstance(payload_json, dict):
+        return payload_json
+    if isinstance(payload_json, str):
+        return json.loads(payload_json)
+    return {}
+
+def _normalized_track(row: dict) -> str:
+    t = (row.get("track") or "").strip().lower()
+    if not t:
+        payload = _ensure_dict(row.get("payload_json"))
+        t = (payload.get("track") or "").strip().lower()
+    if "stud" in t: return "student"
+    if "org" in t or "organization" in t: return "organization"
+    return "student"
 
 # ----------------------------
 # Config

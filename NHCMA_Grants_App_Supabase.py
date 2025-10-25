@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 from typing import Dict, Any, Tuple, Optional
 from urllib.parse import urlparse, parse_qs
 import secrets
-
+from urllib.parse import quote
 import pandas as pd
 import streamlit as st
 from supabase import create_client, Client
@@ -27,6 +27,34 @@ SHA12 = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()[:12]
     # st.sidebar.info(f"Build: {APP_VERSION or 'local'} | SHA: {SHA12}{(' | Commit: ' + APP_COMMIT) if APP_COMMIT else ''}")
 # except Exception:
     # pass
+    
+PROJECT_REF = "icjunpjliexaacexjgwy"
+EDGE_BASE   = f"https://{PROJECT_REF}.supabase.co/functions/v1"
+
+def edge_signed_download_url(bucket: str, path: str) -> str:
+    return f"{EDGE_BASE}/signed-download?bucket={quote(bucket)}&path={quote(path, safe='/')}"
+
+def _bucket_and_key_from_url(u: str) -> tuple[str, str]:
+    if isinstance(u, str) and u.startswith("http"):
+        m = "/storage/v1/object/public/"
+        if m in u:
+            rest = u.split(m, 1)[1].split("?", 1)[0]
+            bucket, _, key = rest.partition("/")
+            return bucket, key
+        m = "/storage/v1/object/sign/"
+        if m in u:
+            rest = u.split(m, 1)[1].split("?", 1)[0]
+            bucket, _, key = rest.partition("/")
+            return bucket, key
+    # use configured bucket for bare keys
+    return BUCKET or "nhcma-uploads", (u or "").lstrip("/")
+
+
+def to_edge(u: str) -> str:
+    if not isinstance(u, str) or not u.strip():
+        return ""
+    b, k = _bucket_and_key_from_url(u)
+    return edge_signed_download_url(b, k)    
 
 def make_excel(df: pd.DataFrame) -> bytes:
     """Return an .xlsx bytes blob for Streamlit download_button."""
@@ -473,7 +501,12 @@ def admin_panel():
         st.info("No submissions yet.")
         return
 
-    # In-app table with clickable links
+    # Convert to Edge links before display
+    for col in ["Proposal URL", "Budget URL", "Other URL"]:
+        if col in df.columns:
+            df[col] = df[col].apply(to_edge)
+
+    # Single render (no duplicate below)
     st.dataframe(
         df,
         use_container_width=True,
@@ -483,6 +516,10 @@ def admin_panel():
             "Other URL":    st.column_config.LinkColumn("Other URL"),
         },
     )
+
+    # --- Full export (CSV + XLSX) ---
+    st.markdown("**Full Export**")
+    ...
 
     # --- Full export (CSV + XLSX) ---
     st.markdown("**Full Export**")
@@ -516,7 +553,13 @@ def admin_panel():
         "Org Name","School","Project Title","Budget Total",
         "Proposal URL","Budget URL","Other URL",
     ]
+    
     export_df = df[[c for c in scoring_cols if c in df.columns]].copy()
+
+    # just before st.dataframe(export_df, ...)
+    for col in ["Proposal URL", "Budget URL", "Other URL"]:
+        if col in export_df.columns:
+            export_df[col] = export_df[col].apply(to_edge)
 
     st.dataframe(
         export_df,
@@ -877,7 +920,11 @@ def judging_portal():
         st.info(f"No submissions for the **{track}** track yet.")
         return
 
-    # Show a quick table
+    # Convert columns to Edge links before displaying
+    for col in ["Proposal URL", "Budget URL", "Other URL"]:
+        if col in sdf.columns:
+            sdf[col] = sdf[col].apply(to_edge)
+
     st.dataframe(
         sdf[["id","Project Title","Org Name","School","Proposal URL","Budget URL"]].fillna(""),
         use_container_width=True,
