@@ -351,7 +351,4 @@ def build_all_booklets(
                 "error": str(e),
             })
 
-    if _HAS_PANDAS:
-        import pandas as pd  # local import
-        return pd.DataFrame(out)
     return out
