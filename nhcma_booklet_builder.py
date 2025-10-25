@@ -74,16 +74,16 @@ def make_signed_url(sb: Client, bucket: str, path: str, expires_in_seconds: int 
 # ----------------------------
 def _add_hyperlink(paragraph, text: str, url: str):
     """
-    Insert a clickable hyperlink into a docx paragraph.
-    Renders blue + underlined like Word's default link style.
+    Insert a clickable hyperlink using a field code:
+      <w:fldSimple w:instr='HYPERLINK "url"'>
+        <w:r><w:rPr>style</w:rPr><w:t>text</w:t></w:r>
+      </w:fldSimple>
+    This renders as a blue, underlined clickable link in Word.
     """
-    part = paragraph.part
-    r_id = part.relate_to(url, RT.HYPERLINK, is_external=True)
+    fld = OxmlElement("w:fldSimple")
+    fld.set(qn("w:instr"), f'HYPERLINK "{url}"')
 
-    hyperlink = OxmlElement("w:hyperlink")
-    hyperlink.set(qn("r:id"), r_id)
-
-    run = OxmlElement("w:r")
+    r = OxmlElement("w:r")
     rPr = OxmlElement("w:rPr")
 
     u = OxmlElement("w:u")
@@ -94,13 +94,14 @@ def _add_hyperlink(paragraph, text: str, url: str):
     color.set(qn("w:val"), "0000FF")
     rPr.append(color)
 
-    run.append(rPr)
+    r.append(rPr)
+
     t = OxmlElement("w:t")
     t.text = text
-    run.append(t)
+    r.append(t)
 
-    hyperlink.append(run)
-    paragraph._p.append(hyperlink)
+    fld.append(r)
+    paragraph._p.append(fld)
     return paragraph
 
 
@@ -118,33 +119,76 @@ def _get_first_nonempty(row: Dict[str, Any], candidates: List[str]) -> Optional[
             return str(v)
     return None
 
-
 def _attachments_from_row(row: Dict[str, Any]) -> List[Tuple[str, Optional[str]]]:
     """
     Extract a list of (label, url_or_path) from a row.
-    - If a JSON field exists with attachment keys, use that.
-    - Else, look for individual columns named by ATTACHMENT_KEYS.
-    We return the *raw value*; caller can turn Storage paths into signed URLs.
+    Preference:
+      1) JSON blob if present AND has at least one non-empty value
+      2) Otherwise, fall back to individual columns (case-insensitive, underscore/space tolerant)
     """
-    # Try JSON-style attachments
+    # Normalize keys for tolerant lookups
+    norm_map = {}
+    for k, v in row.items():
+        if k is None:
+            continue
+        norm = re.sub(r"[\s_]+", "_", str(k).strip().lower())
+        norm_map[norm] = v
+
+    # --- 1) Try JSON-style attachments ---
+    json_data = None
     for cand in ATTACHMENTS_JSON_CANDIDATES:
         blob = row.get(cand)
         if not blob:
             continue
         try:
-            data = blob if isinstance(blob, dict) else json.loads(str(blob))
+            json_data = blob if isinstance(blob, dict) else json.loads(str(blob))
+            if not isinstance(json_data, dict):
+                json_data = None
         except Exception:
-            data = None
-        if isinstance(data, dict):
-            out = []
-            for key in ATTACHMENT_KEYS:
-                out.append((key, data.get(key)))
-            return out
+            json_data = None
 
-    # Fallback: individual columns
+        if isinstance(json_data, dict):
+            collected = []
+            any_nonempty = False
+            for key in ATTACHMENT_KEYS:
+                # allow flexible keys inside JSON too (e.g., "support letter" vs "support_letter")
+                variants = {
+                    key,
+                    key.replace("_", " "),
+                    key.replace("_", "").lower(),
+                }
+                value = None
+                for var in variants:
+                    if var in json_data:
+                        value = json_data.get(var)
+                        break
+                collected.append((key, value))
+                if value:
+                    any_nonempty = True
+
+            if any_nonempty:
+                return collected
+            # else: fall through to per-column scan
+
+    # --- 2) Per-column fallback (tolerant to spaces/underscores/casing) ---
     out = []
     for key in ATTACHMENT_KEYS:
-        out.append((key, row.get(key)))
+        variants = [
+            key,
+            key.replace("_", " "),
+            key.replace("_", ""),  # e.g., "supportletter"
+        ]
+        if key == "cv":
+            variants += ["curriculum_vitae"]
+
+        found = None
+        for var in variants:
+            norm = re.sub(r"[\s_]+", "_", var.strip().lower())
+            if norm in norm_map and norm_map[norm]:
+                found = norm_map[norm]
+                break
+
+        out.append((key, found))
     return out
 
 
