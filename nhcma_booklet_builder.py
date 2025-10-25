@@ -13,6 +13,44 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
+from urllib.parse import quote
+
+# --- Edge Function Config ---
+PROJECT_REF = "icjunpjliexaacexjgwy"  # your Supabase project ref
+EDGE_BASE   = f"https://{PROJECT_REF}.supabase.co/functions/v1"
+
+def _bucket_and_key_from_url(u: str) -> tuple[str, str]:
+    """
+    Accepts either a full Storage URL (public/sign) or a bare object key.
+    Returns (bucket, key).
+    """
+    if isinstance(u, str) and u.startswith("http"):
+        # /storage/v1/object/public/{bucket}/{key...}
+        marker = "/storage/v1/object/public/"
+        if marker in u:
+            rest = u.split(marker, 1)[1].split("?", 1)[0]
+            bucket, _, key = rest.partition("/")
+            return bucket, key
+
+        # /storage/v1/object/sign/{bucket}/{key...}
+        marker = "/storage/v1/object/sign/"
+        if marker in u:
+            rest = u.split(marker, 1)[1].split("?", 1)[0]
+            bucket, _, key = rest.partition("/")
+            return bucket, key
+
+    # Otherwise treat input as an object key in the uploads bucket
+    return "nhcma-uploads", u.lstrip("/")
+
+
+def edge_signed_download_url(bucket: str, path: str) -> str:
+    """
+    Build the Edge Function URL that signs & redirects to Storage.
+    Keeps slashes, encodes spaces, etc.
+    """
+    return f"{EDGE_BASE}/signed-download?bucket={quote(bucket)}&path={quote(path, safe='/')}"
+
+
 # ----------------------------
 # Config
 # ----------------------------
@@ -278,7 +316,9 @@ def build_booklet_docx(submission_row: Dict[str, Any]) -> bytes:
         run.bold = True
 
         if url:
-            _add_hyperlink(para, url, url)   # clickable 🔗
+            bucket, obj_key = _bucket_and_key_from_url(url)
+            signed_edge_url = edge_signed_download_url(bucket, obj_key)
+            _add_hyperlink(para, url, signed_edge_url)   # clickable 🔗 via Edge Function
             any_written = True
         else:
             para.add_run("—")
