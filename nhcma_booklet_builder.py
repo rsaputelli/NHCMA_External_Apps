@@ -50,7 +50,6 @@ def edge_signed_download_url(bucket: str, path: str) -> str:
     """
     return f"{EDGE_BASE}/signed-download?bucket={quote(bucket)}&path={quote(path, safe='/')}"
 
-
 # ----------------------------
 # Config
 # ----------------------------
@@ -232,22 +231,44 @@ def _add_hyperlink(paragraph, text: str, url: str):
     return paragraph
 
 # ----------------------------
+# Track helper
+# ----------------------------
+
+def _normalized_track(row: dict) -> str:
+    """
+    Prefer row['track'], fall back to payload_json['track'].
+    Returns 'student' or 'organization' (default 'student' for safety).
+    """
+    t = (row.get("track") or "").strip().lower()
+    if not t:
+        try:
+            payload = _ensure_dict(row.get("payload_json"))
+            t = (payload.get("track") or "").strip().lower()
+        except Exception:
+            t = ""
+    if "stud" in t:
+        return "student"
+    if "org" in t or "organization" in t:
+        return "organization"
+    return "student"
+
+# ----------------------------
 # DOCX builder
 # ----------------------------
 
 def build_booklet_docx(submission_row: Dict[str, Any]) -> bytes:
     """Create a DOCX booklet from a submissions row. Returns bytes."""
     payload = _ensure_dict(submission_row.get("payload_json"))
-    track   = submission_row.get("track", "") or payload.get("track", "")
     sub_id  = submission_row.get("id")
     created = submission_row.get("created_at")
+    track_norm = _normalized_track(submission_row)
 
     doc = Document()
 
     # Cover
     title = payload.get("project_title") or payload.get("title") or "Grant Submission"
     h = doc.add_heading(level=0)
-    run = h.add_run(f"NHCMA Foundation — {str(track).title()} Track")
+    run = h.add_run(f"NHCMA Foundation — {track_norm.title()} Track")
     run.bold = True
     h.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
@@ -261,8 +282,16 @@ def build_booklet_docx(submission_row: Dict[str, Any]) -> bytes:
 
     doc.add_page_break()
 
-    # Decide section template by track
-    sections = ORG_SECTION_KEYS if str(track).lower().startswith("org") else STUDENT_SECTION_KEYS
+    # Decide section template by track (robust)
+    sections = STUDENT_SECTION_KEYS if track_norm == "student" else ORG_SECTION_KEYS
+
+    # If any advisor fields present, always show an Advisor section after first section
+    if any((payload.get("advisor_name"), payload.get("advisor_title"), payload.get("advisor_email"))):
+        sections = list(sections)  # copy if tuple
+        # Only insert Advisor section if not already included by the chosen template
+        advisor_keys = ("advisor_name", "advisor_title", "advisor_email")
+        if not any("Advisor" in title for title, _ in sections):
+            sections.insert(1, ("Advisor (optional)", list(advisor_keys)))
 
     # Render sections (SKIP attachment keys here to avoid duplicates)
     for section_title, keys in sections:
@@ -297,9 +326,7 @@ def build_booklet_docx(submission_row: Dict[str, Any]) -> bytes:
     any_written = False
 
     for key in ATTACHMENT_KEYS:
-        # Skip CV/support letter for org track
-        if str(track).lower().startswith("org") and key in ("cv", "support_letter"):
-            continue
+        # NOTE: removed the org-track skip so Org also shows CV/Support Letter when present
 
         # Prefer uploads_json → fallback to payload
         url = None
@@ -327,8 +354,8 @@ def build_booklet_docx(submission_row: Dict[str, Any]) -> bytes:
         doc.add_paragraph("No attachments uploaded.")
 
     # Optional: dump any extra fields not covered above under an Appendix
-    covered = {k for _, lst in sections for k in lst}
-    extra_keys = sorted(set(payload.keys()) - {k.split(".")[0] for k in covered} - ATTACHMENT_SET)
+    used_keys = {k for _, lst in sections for k in lst} | ATTACHMENT_SET
+    extra_keys = [k for k in payload.keys() if k not in used_keys]
     if extra_keys:
         doc.add_page_break()
         doc.add_heading("Appendix — Additional Fields", level=2)
@@ -361,7 +388,7 @@ def build_and_store_docx_for_row(sb: Client, row: Dict[str, Any], version: int |
     """Builds a DOCX, uploads to Storage, updates the row. Returns (path, signed_url)."""
     docx_bytes = build_booklet_docx(row)
 
-    track   = (row.get("track") or "").replace(" ", "")
+    track   = (_normalized_track(row) or "").replace(" ", "")
     sub_id  = row.get("id")
     ts      = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
 
@@ -391,7 +418,7 @@ def build_all_booklets(
             path, signed = build_and_store_docx_for_row(sb, row, version=version)
             report.append({
                 "id": row.get("id"),
-                "track": row.get("track"),
+                "track": _normalized_track(row),
                 "docx_path": path,
                 "signed_url": signed,
                 "status": "ok",
