@@ -306,7 +306,11 @@ def list_submissions(sb: Client, where: Optional[Dict[str, Any]] = None) -> List
     return data or []
 
 
-def build_all_booklets(sb: Client, where: Optional[Dict[str, Any]] = None) -> "pd.DataFrame | List[Dict[str, Any]]":
+def build_all_booklets(
+    sb: Client,
+    where: Optional[Dict[str, Any]] = None,
+    start_version: Optional[int] = None,   # accepted for compatibility; ignored
+) -> "pd.DataFrame | List[Dict[str, Any]]":
     """
     Build DOCX booklets for all rows matching the filter, upload to Storage,
     and (if possible) persist booklet path back to the row.
