@@ -1,14 +1,17 @@
 from __future__ import annotations
+
 import io
 import json
 import hashlib
 from datetime import datetime
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional  # <-- include Optional
 
 from supabase import create_client, Client
 from docx import Document
 from docx.shared import Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
 # ----------------------------
 # Config
@@ -16,7 +19,13 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 BUCKET_NAME = "nhcma-booklets"
 TABLE_NAME  = "submissions"
 
+# Attachment key set we will use consistently
+ATTACHMENT_KEYS = ["proposal", "budget", "other", "cv", "support_letter"]
+ATTACHMENT_SET = set(ATTACHMENT_KEYS)
+
 # Optional: standard section ordering for nicer layout (keys must match payload_json fields)
+# NOTE: we include "Attachments" here for organization of labels, BUT we'll SKIP these keys
+# during the section rendering so that only the dedicated Attachments section renders links.
 ORG_SECTION_KEYS = [
     ("Applicant & Organization", [
         "applicant_name", "email", "phone", "org_name", "mission",
@@ -29,6 +38,7 @@ ORG_SECTION_KEYS = [
         "project_title", "q1_issue", "q2_align", "q3_benefit", "description",
         "budget_text", "budget_total", "timeline", "evaluation"
     ]),
+    # Keys listed, but they'll be skipped here to avoid duplicate rendering
     ("Attachments", [
         "proposal", "budget", "other"
     ]),
@@ -48,6 +58,7 @@ STUDENT_SECTION_KEYS = [
         "project_title", "q1_issue", "q2_align", "q3_benefit", "description",
         "budget_text", "budget_total", "timeline", "evaluation"
     ]),
+    # Keys listed, but they'll be skipped here to avoid duplicate rendering
     ("Attachments", [
         "proposal", "budget", "other", "cv", "support_letter"
     ]),
@@ -150,6 +161,39 @@ def human_label(key: str) -> str:
     return parts.strip().capitalize()
 
 # ----------------------------
+# DOCX helpers (clickable links)
+# ----------------------------
+
+def _add_hyperlink(paragraph, text: str, url: str):
+    """
+    Insert a clickable hyperlink using a simple field code:
+      <w:fldSimple w:instr='HYPERLINK "url"'>...</w:fldSimple>
+    This renders as a blue, underlined clickable link in Word.
+    """
+    fld = OxmlElement("w:fldSimple")
+    fld.set(qn("w:instr"), f'HYPERLINK "{url}"')
+
+    r = OxmlElement("w:r")
+    rPr = OxmlElement("w:rPr")
+
+    u = OxmlElement("w:u")
+    u.set(qn("w:val"), "single")
+    rPr.append(u)
+
+    color = OxmlElement("w:color")
+    color.set(qn("w:val"), "0000FF")
+    rPr.append(color)
+
+    r.append(rPr)
+    t = OxmlElement("w:t")
+    t.text = text
+    r.append(t)
+
+    fld.append(r)
+    paragraph._p.append(fld)
+    return paragraph
+
+# ----------------------------
 # DOCX builder
 # ----------------------------
 
@@ -182,10 +226,14 @@ def build_booklet_docx(submission_row: Dict[str, Any]) -> bytes:
     # Decide section template by track
     sections = ORG_SECTION_KEYS if str(track).lower().startswith("org") else STUDENT_SECTION_KEYS
 
-    # Render sections
+    # Render sections (SKIP attachment keys here to avoid duplicates)
     for section_title, keys in sections:
         doc.add_heading(section_title, level=2)
         for key in keys:
+            if key in ATTACHMENT_SET:
+                # attachments are rendered only in the dedicated section below
+                continue
+
             val = get_value(payload, key)
             label = human_label(key)
             if isinstance(val, bool) or (isinstance(val, str) and val.lower() in {"yes", "no", "true", "false"}):
@@ -193,17 +241,13 @@ def build_booklet_docx(submission_row: Dict[str, Any]) -> bytes:
             else:
                 pretty = str(val) if val not in (None, "") else "—"
 
-            # URLs: make it explicit in text (python-docx has no real hyperlink for external links without XML)
-            if key in {"proposal", "budget", "other", "cv", "support_letter"} and pretty not in {"—", "None"}:
-                doc.add_paragraph(f"{label}: {pretty}")
-            else:
-                para = doc.add_paragraph()
-                run = para.add_run(f"{label}: ")
-                run.bold = True
-                para.add_run(pretty)
+            para = doc.add_paragraph()
+            run = para.add_run(f"{label}: ")
+            run.bold = True
+            para.add_run(pretty)
         doc.add_paragraph("")
 
-    # --- Attachments Section (print clickable URLs) ---
+    # --- Attachments Section (clickable URLs) ---
     uploads = submission_row.get("uploads_json") or {}
     if isinstance(uploads, str):
         try:
@@ -212,8 +256,8 @@ def build_booklet_docx(submission_row: Dict[str, Any]) -> bytes:
             uploads = {}
 
     doc.add_heading("Attachments", level=2)
-    ATTACHMENT_KEYS = ["proposal", "budget", "other", "cv", "support_letter"]
     any_written = False
+
     for key in ATTACHMENT_KEYS:
         # Skip CV/support letter for org track
         if str(track).lower().startswith("org") and key in ("cv", "support_letter"):
@@ -232,15 +276,19 @@ def build_booklet_docx(submission_row: Dict[str, Any]) -> bytes:
         para = doc.add_paragraph()
         run = para.add_run(f"{human_label(key)}: ")
         run.bold = True
-        para.add_run(url if url else "—")
-        any_written = any_written or bool(url)
+
+        if url:
+            _add_hyperlink(para, url, url)   # clickable 🔗
+            any_written = True
+        else:
+            para.add_run("—")
 
     if not any_written:
         doc.add_paragraph("No attachments uploaded.")
 
     # Optional: dump any extra fields not covered above under an Appendix
     covered = {k for _, lst in sections for k in lst}
-    extra_keys = sorted(set(payload.keys()) - {k.split(".")[0] for k in covered})
+    extra_keys = sorted(set(payload.keys()) - {k.split(".")[0] for k in covered} - ATTACHMENT_SET)
     if extra_keys:
         doc.add_page_break()
         doc.add_heading("Appendix — Additional Fields", level=2)
@@ -283,7 +331,7 @@ def build_and_store_docx_for_row(sb: Client, row: Dict[str, Any], version: int |
 
     update_submission_paths(sb, sub_id, path_docx=path, version=version)
 
-    # Short-lived signed URL (e.g., 24h). For judge UI, consider generating on demand instead.
+    # Signed URL for the booklet (24h). For judge UI, you can regenerate on demand.
     signed = make_signed_url(sb, BUCKET_NAME, path, expires_in_seconds=24*3600)
     return path, signed
 
@@ -296,7 +344,8 @@ def build_all_booklets(
     """Iterate submissions and build booklets. Returns a report list per row."""
     rows = list_submissions(sb, where=where)
     report: List[Dict[str, Any]] = []
-    version = start_version
+    version = start_version if start_version is not None else 1  # harden
+
     for row in rows:
         try:
             path, signed = build_and_store_docx_for_row(sb, row, version=version)
