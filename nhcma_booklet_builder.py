@@ -1,342 +1,309 @@
-from __future__ import annotations
-import io
-import json
-import hashlib
-from datetime import datetime
-from typing import Dict, Any, List, Tuple
 
+from __future__ import annotations
+
+import io
+import re
+import json
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
+
+# 3rd party
 from supabase import create_client, Client
 from docx import Document
 from docx.shared import Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.opc.constants import RELATIONSHIP_TYPE as RT
+
+# Optional (only used for return report)
+try:
+    import pandas as pd  # noqa: F401
+    _HAS_PANDAS = True
+except Exception:  # pragma: no cover
+    _HAS_PANDAS = False
 
 # ----------------------------
 # Config
 # ----------------------------
+# Storage bucket where booklet files are written
 BUCKET_NAME = "nhcma-booklets"
-TABLE_NAME  = "submissions"
 
-# Optional: standard section ordering for nicer layout (keys must match payload_json fields)
-ORG_SECTION_KEYS = [
-    ("Applicant & Organization", [
-        "applicant_name", "email", "phone", "org_name", "mission",
-        "exec_name", "exec_email", "exec_phone"
-    ]),
-    ("Eligibility", [
-        "eligibility.nonprofit", "eligibility.benefit_gnh", "eligibility.report_at_winter_meeting_2026"
-    ]),
-    ("Project", [
-        "project_title", "q1_issue", "q2_align", "q3_benefit", "description",
-        "budget_text", "budget_total", "timeline", "evaluation"
-    ]),
-    ("Attachments", [
-        "proposal", "budget", "other"
-    ]),
-]
+# Source table of submissions/applications.
+# You can override via environment or Streamlit secrets by importing this module
+# and setting nhcma_booklet_builder.TABLE_NAME before calling build.
+TABLE_NAME = "submissions"
 
-STUDENT_SECTION_KEYS = [
-    ("Applicant", [
-        "applicant_name", "email", "phone", "school", "grad_date"
-    ]),
-    ("Advisor (optional)", [
-        "advisor_name", "advisor_title", "advisor_email"
-    ]),
-    ("Eligibility", [
-        "eligibility.enrolled_qu_yale", "eligibility.report_at_winter_meeting_2026"
-    ]),
-    ("Project", [
-        "project_title", "q1_issue", "q2_align", "q3_benefit", "description",
-        "budget_text", "budget_total", "timeline", "evaluation"
-    ]),
-    ("Attachments", [
-        "proposal", "budget", "other", "cv", "support_letter"
-    ]),
-]
+# Known attachment keys we expect inside a JSON column or individual columns
+ATTACHMENT_KEYS = ["proposal", "budget", "other", "cv", "support_letter"]
+
+# A likely column name that contains a JSON blob of attachment paths or signed URLs
+ATTACHMENTS_JSON_CANDIDATES = ["attachments", "attachment_urls", "files_json"]
+
+# Column to persist the uploaded booklet path back to the record (if present)
+BOOKLET_PATH_COLUMN = "booklet_docx_path"
+
 
 # ----------------------------
 # Supabase helpers
 # ----------------------------
-
 def get_supabase(url: str, key: str) -> Client:
+    """Create a Supabase client from URL and service/anon key."""
     return create_client(url, key)
 
 
-def list_submissions(sb: Client, where: Dict[str, Any] | None = None) -> List[Dict[str, Any]]:
-    q = sb.table(TABLE_NAME).select("*")
-    # only apply filters if explicitly requested and column likely exists
-    if where and isinstance(where, dict):
+def _sb_storage_create_signed_url(sb: Client, bucket: str, path: str, expires_in_seconds: int) -> Optional[str]:
+    try:
+        res = sb.storage.from_(bucket).create_signed_url(path, expires_in_seconds)
+        # Some SDKs return dict with 'signedURL', others with 'signed_url'
+        return res.get("signedURL") or res.get("signed_url")
+    except Exception:
+        return None
+
+
+def make_signed_url(sb: Client, bucket: str, path: str, expires_in_seconds: int = 30 * 24 * 3600) -> Optional[str]:
+    """
+    Create a time-limited URL for a storage object.
+    Default: 30 days to match judging window.
+    """
+    return _sb_storage_create_signed_url(sb, bucket, path, expires_in_seconds)
+
+
+# ----------------------------
+# DOCX helpers
+# ----------------------------
+def _add_hyperlink(paragraph, text: str, url: str):
+    """
+    Insert a clickable hyperlink into a docx paragraph.
+    Renders blue + underlined like Word's default link style.
+    """
+    part = paragraph.part
+    r_id = part.relate_to(url, RT.HYPERLINK, is_external=True)
+
+    hyperlink = OxmlElement("w:hyperlink")
+    hyperlink.set(qn("r:id"), r_id)
+
+    run = OxmlElement("w:r")
+    rPr = OxmlElement("w:rPr")
+
+    u = OxmlElement("w:u")
+    u.set(qn("w:val"), "single")
+    rPr.append(u)
+
+    color = OxmlElement("w:color")
+    color.set(qn("w:val"), "0000FF")
+    rPr.append(color)
+
+    run.append(rPr)
+    t = OxmlElement("w:t")
+    t.text = text
+    run.append(t)
+
+    hyperlink.append(run)
+    paragraph._p.append(hyperlink)
+    return paragraph
+
+
+def _slugify(s: str) -> str:
+    s = s.strip().lower()
+    s = re.sub(r"[^a-z0-9]+", "-", s)
+    s = re.sub(r"-+", "-", s).strip("-")
+    return s or "booklet"
+
+
+def _get_first_nonempty(row: Dict[str, Any], candidates: List[str]) -> Optional[str]:
+    for c in candidates:
+        v = row.get(c)
+        if v:
+            return str(v)
+    return None
+
+
+def _attachments_from_row(row: Dict[str, Any]) -> List[Tuple[str, Optional[str]]]:
+    """
+    Extract a list of (label, url_or_path) from a row.
+    - If a JSON field exists with attachment keys, use that.
+    - Else, look for individual columns named by ATTACHMENT_KEYS.
+    We return the *raw value*; caller can turn Storage paths into signed URLs.
+    """
+    # Try JSON-style attachments
+    for cand in ATTACHMENTS_JSON_CANDIDATES:
+        blob = row.get(cand)
+        if not blob:
+            continue
         try:
-            for k, v in where.items():
-                q = q.eq(k, v)
+            data = blob if isinstance(blob, dict) else json.loads(str(blob))
         except Exception:
-            # if the column doesn't exist, just skip filter
-            pass
-    res = q.execute()
-    return res.data or []
+            data = None
+        if isinstance(data, dict):
+            out = []
+            for key in ATTACHMENT_KEYS:
+                out.append((key, data.get(key)))
+            return out
+
+    # Fallback: individual columns
+    out = []
+    for key in ATTACHMENT_KEYS:
+        out.append((key, row.get(key)))
+    return out
 
 
-def update_submission_paths(sb: Client, submission_id: Any, path_docx: str, version: int | None = None) -> None:
-    payload = {
-        "booklet_docx_path": path_docx,
-        "booklet_updated_at": datetime.utcnow().isoformat() + "Z",
-    }
-    if version is not None:
-        payload["booklet_version"] = version
-    sb.table(TABLE_NAME).update(payload).eq("id", submission_id).execute()
+def _humanize_label(label: str) -> str:
+    return label.replace("_", " ").title()
 
 
-def upload_bytes(sb: Client, bucket: str, path: str, data: bytes, content_type: str) -> None:
-    storage = sb.storage.from_(bucket)
-    # supabase-py expects "contentType" (camelCase) and upsert as a string
-    resp = storage.upload(
-        path=path,
-        file=data,
-        file_options={"contentType": content_type, "upsert": "true"},
-    )
-    # Basic sanity check: raise if error-like payload returned
-    if isinstance(resp, dict) and resp.get("error"):
-        raise RuntimeError(f"Storage upload failed: {resp['error']}")
-
-
-def make_signed_url(sb: Client, bucket: str, path: str, expires_in_seconds: int = 86400) -> str:
-    storage = sb.storage.from_(bucket)
-    res = storage.create_signed_url(path, expires_in_seconds)
-    return res.get("signedURL") or res.get("signed_url") or ""
-
-# ----------------------------
-# Payload utilities
-# ----------------------------
-
-def _ensure_dict(payload_json: Any) -> Dict[str, Any]:
-    if isinstance(payload_json, dict):
-        return payload_json
-    if isinstance(payload_json, str):
-        return json.loads(payload_json)
-    raise TypeError("payload_json is neither dict nor str")
-
-
-def payload_hash(payload: Dict[str, Any]) -> str:
-    # Stable hash for change detection, if you ever want it
-    canonical = json.dumps(payload, sort_keys=True, ensure_ascii=False)
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
-def get_value(payload: Dict[str, Any], dotted_key: str):
-    # Supports keys like "eligibility.nonprofit"
-    cur = payload
-    for part in dotted_key.split("."):
-        if isinstance(cur, dict) and part in cur:
-            cur = cur[part]
-        else:
-            return None
-    return cur
-
-
-def fmt_bool(v) -> str:
-    if isinstance(v, bool):
-        return "✅ Yes" if v else "❌ No"
-    # Some forms store "yes"/"no" strings
-    if isinstance(v, str):
-        if v.strip().lower() in {"yes", "true", "y"}:
-            return "✅ Yes"
-        if v.strip().lower() in {"no", "false", "n"}:
-            return "❌ No"
-    return str(v) if v is not None else "—"
-
-
-def human_label(key: str) -> str:
-    # Turn snake_case or dotted into Title Case labels
-    parts = key.split(".")[-1].replace("_", " ")
-    return parts.strip().capitalize()
-
-# ----------------------------
-# DOCX builder
-# ----------------------------
-
-def build_booklet_docx(submission_row: Dict[str, Any]) -> bytes:
-    """Create a DOCX booklet from a submissions row. Returns bytes."""
-    payload = _ensure_dict(submission_row.get("payload_json"))
-    track   = submission_row.get("track", "") or payload.get("track", "")
-    sub_id  = submission_row.get("id")
-    created = submission_row.get("created_at")
-
+def build_booklet_docx(sb: Client, row: Dict[str, Any]) -> bytes:
+    """
+    Build a single booklet (DOCX) for one submission row.
+    Returns the file bytes.
+    """
     doc = Document()
 
-    # Cover
-    title = payload.get("project_title") or payload.get("title") or "Grant Submission"
-    h = doc.add_heading(level=0)
-    run = h.add_run(f"NHCMA Foundation — {str(track).title()} Track")
-    run.bold = True
-    h.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-    h2 = doc.add_heading(level=1)
-    h2.add_run(title)
-    h2.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
+    # --- Title ---
+    title = _get_first_nonempty(row, ["project_title", "title", "application_title", "proposal_title"]) or "Application"
+    org = _get_first_nonempty(row, ["organization_name", "org_name", "applicant_organization", "submitter"]) or ""
     p = doc.add_paragraph()
+    run = p.add_run(title)
+    run.bold = True
+    run.font.size = Pt(16)
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p.add_run(f"Submission ID: {sub_id}  •  Submitted: {created}")
+    if org:
+        p2 = doc.add_paragraph(org)
+        p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-    doc.add_page_break()
+    doc.add_paragraph("")
 
-    # Decide section template by track
-    sections = ORG_SECTION_KEYS if str(track).lower().startswith("org") else STUDENT_SECTION_KEYS
-
-    # Render sections
-    for section_title, keys in sections:
-        doc.add_heading(section_title, level=2)
-        for key in keys:
-            val = get_value(payload, key)
-            label = human_label(key)
-            if isinstance(val, bool) or (isinstance(val, str) and val.lower() in {"yes", "no", "true", "false"}):
-                pretty = fmt_bool(val)
-            else:
-                pretty = str(val) if val not in (None, "") else "—"
-
-            # URLs: make it explicit in text (python-docx has no real hyperlink for external links without XML)
-            if key in {"proposal", "budget", "other", "cv", "support_letter"} and pretty not in {"—", "None"}:
-                doc.add_paragraph(f"{label}: {pretty}")
-            else:
-                para = doc.add_paragraph()
-                run = para.add_run(f"{label}: ")
-                run.bold = True
-                para.add_run(pretty)
-        doc.add_paragraph("")
-
-    # --- Attachments Section (print clickable URLs) ---
-    uploads = submission_row.get("uploads_json") or {}
-    if isinstance(uploads, str):
-        try:
-            uploads = json.loads(uploads)
-        except Exception:
-            uploads = {}
-
-    doc.add_heading("Attachments", level=2)
-    ATTACHMENT_KEYS = ["proposal", "budget", "other", "cv", "support_letter"]
-    any_written = False
-    for key in ATTACHMENT_KEYS:
-        # Skip CV/support letter for org track
-        if str(track).lower().startswith("org") and key in ("cv", "support_letter"):
-            continue
-
-        # Prefer uploads_json → fallback to payload
-        url = None
-        v = uploads.get(key)
-        if isinstance(v, str) and v.strip():
-            url = v
-        else:
-            pv = get_value(payload, key) or payload.get(key)
-            if isinstance(pv, str) and pv.strip():
-                url = pv
-
-        para = doc.add_paragraph()
-        run = para.add_run(f"{human_label(key)}: ")
-        run.bold = True
-        para.add_run(url if url else "—")
-        any_written = any_written or bool(url)
-
-    if not any_written:
-        doc.add_paragraph("No attachments uploaded.")
-
-    # Optional: dump any extra fields not covered above under an Appendix
-    covered = {k for _, lst in sections for k in lst}
-    extra_keys = sorted(set(payload.keys()) - {k.split(".")[0] for k in covered})
-    if extra_keys:
-        doc.add_page_break()
-        doc.add_heading("Appendix — Additional Fields", level=2)
-        for k in extra_keys:
-            v = payload.get(k)
-            if isinstance(v, (dict, list)):
-                try:
-                    v = json.dumps(v, ensure_ascii=False)
-                except Exception:
-                    v = str(v)
+    # --- Basic fields that are common; we only render those that exist ---
+    basic_fields = [
+        ("Applicant", ["applicant_name", "contact_name", "full_name"]),
+        ("Email", ["applicant_email", "email"]),
+        ("Phone", ["applicant_phone", "phone"]),
+        ("Requested Amount", ["requested_amount", "amount_requested"]),
+        ("Summary", ["summary", "project_summary", "abstract"]),
+    ]
+    for label, candidates in basic_fields:
+        val = _get_first_nonempty(row, candidates)
+        if val:
             para = doc.add_paragraph()
-            run = para.add_run(f"{human_label(k)}: ")
-            run.bold = True
-            para.add_run(str(v) if v not in (None, "") else "—")
+            r = para.add_run(f"{label}: ")
+            r.bold = True
+            para.add_run(str(val))
 
-    # Typography tweaks
-    for p in doc.paragraphs:
-        for run in p.runs:
-            run.font.size = Pt(11)
+    # --- Attachments ---
+    doc.add_paragraph("")
+    hdr = doc.add_paragraph()
+    r = hdr.add_run("Attachments")
+    r.bold = True
 
+    attachments = _attachments_from_row(row)
+    if not attachments:
+        para = doc.add_paragraph("— None —")
+    else:
+        for key, raw in attachments:
+            para = doc.add_paragraph()
+            r = para.add_run(f"{_humanize_label(key)}: ")
+            r.bold = True
+            if not raw:
+                para.add_run("—")
+                continue
+
+            # If it's a storage path, attempt to sign it; if it's already an http(s) URL, use as-is
+            url = str(raw)
+            if not re.match(r"^https?://", url, flags=re.I):
+                # Heuristic: treat as Storage path
+                signed = make_signed_url(sb, BUCKET_NAME, url, 30 * 24 * 3600)
+                url = signed or url  # fall back to raw path
+
+            # Insert clickable hyperlink
+            _add_hyperlink(para, url, url)
+
+    # Footer
+    doc.add_paragraph("")
+    small = doc.add_paragraph()
+    rr = small.add_run(f"Generated {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')} • NHCMA Judging Booklet")
+    rr.font.size = Pt(8)
+
+    # Serialize
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
 
-# ----------------------------
-# Batch builder
-# ----------------------------
 
-def build_and_store_docx_for_row(sb: Client, row: Dict[str, Any], version: int | None = None) -> Tuple[str, str]:
-    """Builds a DOCX, uploads to Storage, updates the row. Returns (path, signed_url)."""
-    docx_bytes = build_booklet_docx(row)
-
-    track   = (row.get("track") or "").replace(" ", "")
-    sub_id  = row.get("id")
-    ts      = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
-
-    path = f"booklets/{sub_id}/NHCMA_Grants_{track}_{sub_id}_{ts}.docx"
-    upload_bytes(sb, BUCKET_NAME, path, docx_bytes,
-                 content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-
-    update_submission_paths(sb, sub_id, path_docx=path, version=version)
-
-    # Short-lived signed URL (e.g., 24h). For judge UI, consider generating on demand instead.
-    signed = make_signed_url(sb, BUCKET_NAME, path, expires_in_seconds=24*3600)
-    return path, signed
+def _upload_bytes(sb: Client, bucket: str, path: str, data: bytes, content_type: str = "application/vnd.openxmlformats-officedocument.wordprocessingml.document") -> str:
+    """
+    Upload bytes to Supabase Storage (upsert). Returns the object path.
+    """
+    sb.storage.from_(bucket).upload(path, data, {"content-type": content_type, "upsert": "true"})
+    return path
 
 
-def build_all_booklets(sb: Client, where: Dict[str, Any] | None = None, start_version: int = 1) -> List[Dict[str, Any]]:
-    """Iterate submissions and build booklets. Returns a report list per row."""
+def _safe(str_or_none: Optional[str]) -> str:
+    return (str_or_none or "").strip()
+
+
+def _row_id(row: Dict[str, Any]) -> Optional[str]:
+    for k in ("id", "application_id", "submission_id"):
+        v = row.get(k)
+        if v is not None:
+            return str(v)
+    return None
+
+
+def list_submissions(sb: Client, where: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    q = sb.table(TABLE_NAME).select("*")
+    if where:
+        for k, v in where.items():
+            q = q.eq(k, v)
+    res = q.execute()
+    data = getattr(res, "data", None) or getattr(res, "json", None) or []
+    # supabase-py returns dict with 'data'
+    if isinstance(data, dict) and "data" in data:
+        data = data["data"]
+    return data or []
+
+
+def build_all_booklets(sb: Client, where: Optional[Dict[str, Any]] = None) -> "pd.DataFrame | List[Dict[str, Any]]":
+    """
+    Build DOCX booklets for all rows matching the filter, upload to Storage,
+    and (if possible) persist booklet path back to the row.
+    Returns a DataFrame (if pandas installed) or a list of dicts.
+    """
     rows = list_submissions(sb, where=where)
-    report: List[Dict[str, Any]] = []
-    version = start_version
+    out: List[Dict[str, Any]] = []
+
     for row in rows:
         try:
-            path, signed = build_and_store_docx_for_row(sb, row, version=version)
-            report.append({
-                "id": row.get("id"),
-                "track": row.get("track"),
-                "docx_path": path,
-                "signed_url": signed,
-                "status": "ok",
+            rid = _row_id(row) or "unknown"
+            org = _get_first_nonempty(row, ["organization_name", "org_name"]) or "org"
+            title = _get_first_nonempty(row, ["project_title", "title"]) or "application"
+
+            filename = f"{_slugify(org)}--{_slugify(title)}--{rid}.docx"
+            path = f"booklets/{rid}/{filename}"
+
+            data = build_booklet_docx(sb, row)
+            uploaded_path = _upload_bytes(sb, BUCKET_NAME, path, data)
+
+            # Persist path back if column exists (best-effort)
+            try:
+                if BOOKLET_PATH_COLUMN in row:
+                    sb.table(TABLE_NAME).update({BOOKLET_PATH_COLUMN: uploaded_path}).eq("id", row.get("id")).execute()
+            except Exception:
+                pass
+
+            out.append({
+                "id": rid,
+                "title": title,
+                "organization": org,
+                "booklet_docx_path": uploaded_path,
+                "signed_url_30d": make_signed_url(sb, BUCKET_NAME, uploaded_path, 30 * 24 * 3600),
             })
-            version += 1
         except Exception as e:
-            report.append({
-                "id": row.get("id"),
-                "track": row.get("track"),
+            out.append({
+                "id": _row_id(row) or "unknown",
                 "error": str(e),
-                "status": "error",
             })
-    return report
 
-# ----------------------------
-# (Optional) Streamlit admin hook
-# ----------------------------
-"""
-Example wiring in your admin page:
-
-import streamlit as st
-from nhcma_booklet_builder import get_supabase, build_all_booklets
-
-sb = get_supabase(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_SERVICE_ROLE_KEY"])
-
-st.header("Build Booklets for Judging")
-if st.button("Build All Booklets Now"):
-    with st.spinner("Building…"):
-        report = build_all_booklets(sb, where={"status": "submitted"})
-    st.success("Done.")
-    st.dataframe(report)
-
-In the judge view (to show a fresh signed URL from stored path):
-
-path = row.get("booklet_docx_path")
-if path:
-    url = make_signed_url(sb, BUCKET_NAME, path, expires_in_seconds=24*3600)
-    st.link_button("Download Booklet (DOCX)", url)
-else:
-    st.info("No booklet yet — ask admin to build.")
-"""
+    if _HAS_PANDAS:
+        import pandas as pd  # local import
+        return pd.DataFrame(out)
+    return out
