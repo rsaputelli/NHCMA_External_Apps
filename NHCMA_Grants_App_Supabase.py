@@ -804,7 +804,7 @@ def admin_panel():
         st.write(f"Built {ok} OK / {err} errors")
         st.write("DEBUG – report count:", len(report))
 
-    st\.caption\(\"Tip: you can re-run the build any time after submissions are frozen\.\"\)
+    st.caption("Tip: you can re-run the build any time after submissions are frozen.")
 
     st.divider()
     with st.expander("⚙️ Submission Deadlines", expanded=False):
