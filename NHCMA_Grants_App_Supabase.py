@@ -5,11 +5,13 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, Tuple, Optional
 from urllib.parse import urlparse, parse_qs
-import secrets
 from urllib.parse import quote
 import pandas as pd
 import streamlit as st
 from supabase import create_client, Client
+import bcrypt, secrets
+from itsdangerous import URLSafeTimedSerializer
+from streamlit_cookies_manager import EncryptedCookieManager
 
 # --- Build/Version Banner (always visible, no duplicates) ---
 # st.set_page_config(page_title=APP_TITLE, layout="wide", initial_sidebar_state="collapsed")
@@ -90,6 +92,114 @@ def supabase_client() -> Client:
 
 sb = supabase_client()
 
+# ========= Judge PIN + Cookie Sessions (lazy init) =========
+SESSION_TTL_DAYS = int(st.secrets.get("SESSION_TTL_DAYS", "30"))
+BCRYPT_ROUNDS    = int(st.secrets.get("BCRYPT_ROUNDS", "12"))
+COOKIE_SIGNING_KEY = st.secrets["COOKIE_SIGNING_KEY"]
+
+# Lazy cookie/signing init so submissions aren’t affected
+cookies = None
+signer = None
+
+def _ensure_cookie_env():
+    """Initialize cookies + signer only when judging auth is in play."""
+    global cookies, signer
+    if cookies is not None and signer is not None:
+        return
+    # Import here to avoid global hard dependency during submission-only runs
+    from streamlit_cookies_manager import EncryptedCookieManager
+    from itsdangerous import URLSafeTimedSerializer
+
+    c = EncryptedCookieManager(prefix="nhcma_")
+    if not c.ready():
+        # Only stop the flow when we actually need cookies
+        st.stop()
+    s = URLSafeTimedSerializer(COOKIE_SIGNING_KEY)
+    cookies, signer = c, s
+
+def hash_pin(pin: str) -> str:
+    salt = bcrypt.gensalt(rounds=BCRYPT_ROUNDS)
+    return bcrypt.hashpw(pin.encode("utf-8"), salt).decode("utf-8")
+
+def verify_pin(pin: str, pin_hash: str) -> bool:
+    try:
+        return bcrypt.checkpw(pin.encode("utf-8"), pin_hash.encode("utf-8"))
+    except Exception:
+        return False
+
+def _require_admin():
+    if not sb_admin:
+        st.error("Server-side credentials missing (SUPABASE_SERVICE_ROLE_KEY). Judging auth requires service role.")
+        st.stop()
+
+def _db_set_pin(judge_id: str, pin_hash: str):
+    _require_admin()
+    sb_admin.table("judges").update({
+        "pin_hash": pin_hash,
+        "pin_set_at": datetime.now(timezone.utc).isoformat()
+    }).eq("id", judge_id).execute()
+
+def _db_judge_by_email(email: str):
+    _require_admin()
+    rows = sb_admin.table("judges").select("*").eq("email", email.lower().strip()).limit(1).execute().data or []
+    return rows[0] if rows else None
+
+def _db_judge_by_id(judge_id: str):
+    _require_admin()
+    rows = sb_admin.table("judges").select("*").eq("id", judge_id).limit(1).execute().data or []
+    return rows[0] if rows else None
+
+def _db_create_session(judge_id: str) -> str:
+    _require_admin()
+    token = secrets.token_urlsafe(32)
+    expires = datetime.now(timezone.utc) + timedelta(days=SESSION_TTL_DAYS)
+    sb_admin.table("judge_sessions").insert({
+        "judge_id": judge_id,
+        "session_token": token,
+        "expires_at": expires.isoformat()
+    }).execute()
+    return token
+
+def _db_validate_session(token: str):
+    _require_admin()
+    if not token:
+        return None
+    rows = (sb_admin.table("judge_sessions")
+            .select("*, judges:judge_id(full_name,email)")
+            .eq("session_token", token)
+            .limit(1).execute().data or [])
+    if not rows:
+        return None
+    row = rows[0]
+    exp = datetime.fromisoformat(row["expires_at"].replace("Z","")).astimezone(timezone.utc)
+    if exp < datetime.now(timezone.utc):
+        return None
+    return {
+        "judge_id": row["judge_id"],
+        "name": row["judges"]["full_name"],
+        "email": row["judges"]["email"],
+    }
+
+def set_cookie_session(token: str):
+    _ensure_cookie_env()
+    signed = signer.dumps({"t": token})
+    cookies.set("nhcma_judge", signed, max_age=SESSION_TTL_DAYS*24*3600)
+
+def get_cookie_session():
+    _ensure_cookie_env()
+    raw = cookies.get("nhcma_judge")
+    if not raw:
+        return None
+    try:
+        payload = signer.loads(raw, max_age=SESSION_TTL_DAYS*24*3600)
+        return payload.get("t")
+    except Exception:
+        return None
+
+def clear_cookie_session():
+    _ensure_cookie_env()
+    cookies.delete("nhcma_judge")
+    # ========= /Judge PIN + Cookie Sessions =========
 
 # SMTP config (supports flat keys or [smtp] section)
 _smtp = st.secrets.get("smtp", {})
@@ -516,10 +626,6 @@ def admin_panel():
             "Other URL":    st.column_config.LinkColumn("Other URL"),
         },
     )
-
-    # --- Full export (CSV + XLSX) ---
-    st.markdown("**Full Export**")
-    ...
 
     # --- Full export (CSV + XLSX) ---
     st.markdown("**Full Export**")
@@ -1010,42 +1116,66 @@ def judging_portal():
             st.error(f"Failed to save: {e}")
             
 # --- Early invite-token resolver (runs before UI) ---
+
 def _consume_invite_from_query():
-    """If a URL contains ?invite_token=..., resolve it and store judge_session,
-    then clear the query string and rerun once."""
+    """If URL has ?invite_token=..., resolve it.
+       If first-time: set PIN.
+       Otherwise: create cookie session and sign in, then clear query + rerun."""
     try:
         params = dict(st.query_params) if hasattr(st, "query_params") else st.experimental_get_query_params()
-        token = None
-        if params:
-            raw = params.get("invite_token")
-            token = (raw[0] if isinstance(raw, list) else raw) or None
+        raw = params.get("invite_token")
+        token = (raw[0] if isinstance(raw, list) else raw) if raw else None
         if not token:
             return
 
-        who = _resolve_token(token)
+        who = _resolve_token(token)  # -> {judge_id, email, name} or None
         if not who:
             st.warning("Invite link invalid or expired.")
             return
 
-        st.session_state["judge_session"] = who
+        # First-time PIN setup?
+        j = _db_judge_by_id(who["judge_id"]) or {}
+        if not j.get("pin_hash"):
+            st.info(f"Welcome, {who['name']}. Create a 4–8 digit PIN for future sign-ins (no invite link needed).")
+            pin1 = st.text_input("Choose a PIN (digits only, 4–8)", type="password", key="pin_new_1")
+            pin2 = st.text_input("Confirm PIN", type="password", key="pin_new_2")
+            if st.button("Save PIN", type="primary", key="btn_save_pin"):
+                if not pin1 or not pin1.isdigit() or not (4 <= len(pin1) <= 8) or pin1 != pin2:
+                    st.error("PIN must be 4–8 digits (numbers only) and both fields must match.")
+                else:
+                    _db_set_pin(who["judge_id"], hash_pin(pin1))
+                    # Create session + cookie
+                    sess = _db_create_session(who["judge_id"])
+                    set_cookie_session(sess)
+                    st.session_state["judge_session"] = {"judge_id": who["judge_id"], "email": who["email"], "name": who["name"]}
+                    try:
+                        if hasattr(st, "query_params"):
+                            st.query_params.clear()
+                    except Exception:
+                        pass
+                    st.success("PIN set. You’re signed in.")
+                    st.rerun()
+            st.stop()  # Stay on PIN screen until saved
 
+        # Existing PIN → sign in with session + cookie
+        sess = _db_create_session(who["judge_id"])
+        set_cookie_session(sess)
+        st.session_state["judge_session"] = {"judge_id": who["judge_id"], "email": who["email"], "name": who["name"]}
         try:
             if hasattr(st, "query_params"):
                 st.query_params.clear()
         except Exception:
             pass
-
+        st.success(f"Welcome, {who['name']}! You’re signed in.")
         st.rerun()
+
     except Exception as e:
         st.error("Could not process invite. Please try again.")
         st.exception(e)
 
+
 # Run resolver before any UI renders
 _consume_invite_from_query()
-
-# Header with logo + title
-
-
 
 # Header with logo + title
 col_logo, col_title = st.columns([1, 5], vertical_alignment="center")
@@ -1119,11 +1249,39 @@ with tab3:
 
 # --- Judging tab render ---
 if _judging_enabled():
-    try:
-        with tab4:
+    with tab4:
+        # 1) If we already have a session, show logout
+        if "judge_session" in st.session_state:
+            if st.sidebar.button("Log out"):
+                clear_cookie_session()
+                st.session_state.pop("judge_session", None)
+                st.rerun()
+
+        # 2) Otherwise try cookie first; then email+PIN fallback
+        if "judge_session" not in st.session_state:
+            tok = get_cookie_session()
+            who = _db_validate_session(tok) if tok else None
+            if who:
+                st.session_state["judge_session"] = who
+            else:
+                with st.expander("Judge Sign In", expanded=True):
+                    email = st.text_input("Email", key="judge_login_email")
+                    pin   = st.text_input("PIN", type="password", key="judge_login_pin")
+                    if st.button("Sign in", key="judge_login_btn"):
+                        j = _db_judge_by_email(email or "")
+                        if not j or not j.get("pin_hash") or not verify_pin(pin or "", j["pin_hash"]):
+                            st.error("Invalid email or PIN.")
+                        else:
+                            sess = _db_create_session(j["id"])
+                            set_cookie_session(sess)
+                            st.session_state["judge_session"] = {"judge_id": j["id"], "email": j["email"], "name": j["full_name"]}
+                            st.rerun()
+                st.stop()
+
+        # 3) Safe to render portal
+        try:
             judging_portal()
-    except Exception as e:
-        with tab4:
+        except Exception as e:
             st.error("Judging tab failed to render.")
             st.exception(e)
 
