@@ -183,22 +183,29 @@ def _db_validate_session(token: str):
 def set_cookie_session(token: str):
     _ensure_cookie_env()
     signed = signer.dumps({"t": token})
-    cookies.set("nhcma_judge", signed, max_age=SESSION_TTL_DAYS*24*3600)
+    # NEW API: dict-style assignment + save()
+    cookies["nhcma_judge"] = signed
+    cookies.save()
 
 def get_cookie_session():
     _ensure_cookie_env()
+    # NEW API: dict-style get()
     raw = cookies.get("nhcma_judge")
     if not raw:
         return None
     try:
-        payload = signer.loads(raw, max_age=SESSION_TTL_DAYS*24*3600)
+        payload = signer.loads(raw, max_age=SESSION_TTL_DAYS * 24 * 3600)
         return payload.get("t")
     except Exception:
         return None
 
 def clear_cookie_session():
     _ensure_cookie_env()
-    cookies.delete("nhcma_judge")
+    # NEW API: delete key then save()
+    if "nhcma_judge" in cookies:
+        del cookies["nhcma_judge"]
+        cookies.save()
+
     # ========= /Judge PIN + Cookie Sessions =========
 
 # SMTP config (supports flat keys or [smtp] section)
