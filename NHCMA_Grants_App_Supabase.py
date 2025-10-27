@@ -9,7 +9,8 @@ from urllib.parse import quote
 import pandas as pd
 import streamlit as st
 from supabase import create_client, Client
-import bcrypt, secrets
+import bcrypt
+import secrets
 from itsdangerous import URLSafeTimedSerializer
 from streamlit_cookies_manager import EncryptedCookieManager
 
