@@ -111,9 +111,8 @@ def _ensure_cookie_env():
     from streamlit_cookies_manager import EncryptedCookieManager
     from itsdangerous import URLSafeTimedSerializer
 
-    c = EncryptedCookieManager(prefix="nhcma_")
+    c = EncryptedCookieManager(prefix="nhcma_", password=COOKIE_SIGNING_KEY)
     if not c.ready():
-        # Only stop the flow when we actually need cookies
         st.stop()
     s = URLSafeTimedSerializer(COOKIE_SIGNING_KEY)
     cookies, signer = c, s
