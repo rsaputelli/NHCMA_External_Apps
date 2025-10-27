@@ -17,6 +17,48 @@ from streamlit_cookies_manager import EncryptedCookieManager
 APP_TITLE = "NHCMA Foundation — 2025 Public Health Innovation Grants"
 TIMEZONE = "America/New_York"
 
+# ========= Admin-configurable Deadlines =========
+SETTINGS_KEYS = {
+    "org": "org_deadline_iso",
+    "stu": "stu_deadline_iso",
+}
+
+def _parse_iso_to_et(iso_s: str, fallback_dt: datetime) -> datetime:
+    try:
+        # Accept 'Z' or explicit offsets
+        dt = datetime.fromisoformat(iso_s.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+        return dt.astimezone(ZoneInfo(TIMEZONE))
+    except Exception:
+        return fallback_dt
+
+def get_deadlines(sb_read) -> tuple[datetime, datetime]:
+    """Return (ORG_DEADLINE_ET, STU_DEADLINE_ET) with DB override if present."""
+    # hardcoded fallback (kept!)
+    org_fb = datetime(2025, 12, 27, 23, 59, tzinfo=ZoneInfo(TIMEZONE))
+    stu_fb = datetime(2025, 12, 27, 23, 59, tzinfo=ZoneInfo(TIMEZONE))
+    try:
+        rows = sb_read.table("app_settings").select("key,value").in_("key", [
+            SETTINGS_KEYS["org"], SETTINGS_KEYS["stu"]
+        ]).execute().data or []
+        mp = {r["key"]: r["value"] for r in rows}
+        org = _parse_iso_to_et(mp.get(SETTINGS_KEYS["org"], ""), org_fb)
+        stu = _parse_iso_to_et(mp.get(SETTINGS_KEYS["stu"], ""), stu_fb)
+        return org, stu
+    except Exception:
+        return org_fb, stu_fb
+
+def set_deadline(sb_write, track: str, dt_local: datetime):
+    """Persist a deadline as ISO with proper timezone offset."""
+    key = SETTINGS_KEYS["org" if track == "organization" else "stu"]
+    iso_val = dt_local.isoformat()
+    sb_write.table("app_settings").upsert(
+        {"key": key, "value": iso_val},
+        on_conflict="key"
+    ).execute()
+# ========= /Admin-configurable Deadlines =========
+
 # --- Build/Version Banner (always visible, no duplicates) ---
 st.set_page_config(page_title=APP_TITLE, layout="wide", initial_sidebar_state="collapsed")
 
@@ -762,7 +804,37 @@ def admin_panel():
         st.write(f"Built {ok} OK / {err} errors")
         st.write("DEBUG – report count:", len(report))
 
-    st.caption("Tip: you can re-run the build any time after submissions are frozen.")
+    st\.caption\(\"Tip: you can re-run the build any time after submissions are frozen\.\"\)
+
+    st.divider()
+    with st.expander("⚙️ Submission Deadlines", expanded=False):
+        # Load current values
+        _org_deadline, _stu_deadline = get_deadlines(sb_admin or sb)
+
+        colA, colB = st.columns(2)
+        with colA:
+            st.caption("Organization Deadline (ET)")
+            org_date = st.date_input("Date", value=_org_deadline.date(), key="org_dl_date")
+            org_time = st.time_input("Time", value=_org_deadline.timetz(), key="org_dl_time")
+        with colB:
+            st.caption("Student Deadline (ET)")
+            stu_date = st.date_input("Date ", value=_stu_deadline.date(), key="stu_dl_date")
+            stu_time = st.time_input("Time ", value=_stu_deadline.timetz(), key="stu_dl_time")
+
+        save = st.button("Save Deadlines", type="primary", key="save_deadlines_btn")
+        if save:
+            if not sb_admin:
+                st.error("Service-role key is not configured; cannot save settings.")
+            else:
+                org_new = datetime.combine(org_date, org_time, tzinfo=ZoneInfo(TIMEZONE))
+                stu_new = datetime.combine(stu_date, stu_time, tzinfo=ZoneInfo(TIMEZONE))
+                try:
+                    set_deadline(sb_admin, "organization", org_new)
+                    set_deadline(sb_admin, "student", stu_new)
+                    st.success("Deadlines saved.")
+                    st.toast("Deadlines updated", icon="✅")
+                except Exception as e:
+                    st.error(f"Failed to save deadlines: {e}")
 
 
 def _judging_enabled() -> bool:
@@ -862,6 +934,110 @@ def admin_judging_tools(app_base_url: str | None = None):
                 st.success(f"Invite sent to {name or email} ({email}).", icon="✅")
             else:
                 st.error("Email failed to send. You can copy the link above and send manually.", icon="✉️")
+
+    # ----------------------------
+    # Bulk Invite via CSV
+    # ----------------------------
+    st.divider()
+    with st.expander("📥 Bulk Invite Judges (CSV)", expanded=False):
+        st.markdown(
+            "Upload a CSV with columns: **full_name,email[,days_valid]**. "
+            "We’ll upsert judges and create fresh invite tokens."
+        )
+        csv_file = st.file_uploader("Upload CSV", type=["csv"], key="bulk_invite_csv")
+        colX, colY = st.columns(2)
+        with colX:
+            do_send = st.checkbox("Send emails now", value=True, help="If unchecked, links are generated but not emailed.")
+        with colY:
+            default_days = st.number_input("Default link validity (days)", min_value=1, max_value=180, value=30, step=1)
+
+        if csv_file is not None:
+            try:
+                _df = pd.read_csv(csv_file).fillna("")
+            except Exception as e:
+                st.error(f"Could not read CSV: {e}")
+                _df = pd.DataFrame()
+
+            if not _df.empty:
+                # Normalize & validate
+                cols = {c.strip().lower(): c for c in _df.columns}
+                if "email" not in cols or "full_name" not in cols:
+                    st.error("CSV must include columns: full_name, email (days_valid optional).")
+                else:
+                    work = _df.rename(columns={
+                        cols["full_name"]: "full_name",
+                        cols["email"]: "email",
+                        **({"days_valid": cols.get("days_valid")} if cols.get("days_valid") else {})
+                    })[["full_name", "email"] + (["days_valid"] if "days_valid" in _df.columns else [])].copy()
+
+                    # Clean strings
+                    work["full_name"] = work["full_name"].astype(str).str.strip()
+                    work["email"] = work["email"].astype(str).str.strip().str.lower()
+                    if "days_valid" in work.columns:
+                        # Coerce invalid to NaN then fill with default
+                        work["days_valid"] = pd.to_numeric(work["days_valid"], errors="coerce").fillna(default_days).astype(int)
+                    else:
+                        work["days_valid"] = int(default_days)
+
+                    # Drop rows with missing essentials and dedupe by email
+                    work = work[work["email"].str.contains("@", na=False)]
+                    work = work.drop_duplicates(subset=["email"])
+
+                    # Process
+                    results = []
+                    progress = st.progress(0.0, text="Inviting judges...")
+                    total = len(work)
+                    for i, row in enumerate(work.itertuples(index=False), start=1):
+                        email = row.email
+                        fname = row.full_name
+                        dvalid = int(row.days_valid) if hasattr(row, "days_valid") and row.days_valid is not None else int(default_days)
+                        try:
+                            # create/refresh token and ensure judge is active
+                            token = _create_invite(email, fname, days_valid=dvalid)
+                            invite_url = f"https://nhcmafoundationgrants.streamlit.app/?invite_token={token}"
+
+                            sent = False
+                            if do_send:
+                                subject = "NHCMA Foundation Grants — Your Judge Invite"
+                                body_html = f"""
+                                    <p>You're invited to judge NHCMA grants.</p>
+                                    <p><strong>Direct link:</strong> <a href="{invite_url}">{invite_url}</a></p>
+                                    <p>If you didn't expect this, you can ignore this message.</p>
+                                """
+                                sent = send_email(email, CC_EMAIL, subject, body_html)
+
+                            results.append({
+                                "Full Name": fname,
+                                "Email": email,
+                                "Days Valid": dvalid,
+                                "Invite URL": invite_url,
+                                "Email Sent": "Yes" if (do_send and sent) else ("No (link only)" if not do_send else "Failed"),
+                            })
+                        except Exception as e:
+                            results.append({
+                                "Full Name": fname,
+                                "Email": email,
+                                "Days Valid": dvalid,
+                                "Invite URL": "",
+                                "Email Sent": f"Error: {e}",
+                            })
+                        progress.progress(i/total, text=f"Processed {i}/{total}")
+
+                    st.success(f"Processed {total} judge(s).")
+                    res_df = pd.DataFrame(results)
+                    st.dataframe(res_df, use_container_width='stretch')
+                    st.download_button(
+                        "Download Results (CSV)",
+                        res_df.to_csv(index=False).encode("utf-8"),
+                        "judge_bulk_invite_results.csv",
+                        "text/csv",
+                        key="bulk_invite_results_dl",
+                        use_container_width='stretch',
+                    )
+            else:
+                st.info("CSV appears empty.")
+
+
 
     # ----------------------------
     # Scoring Tally (Averages)
@@ -1218,6 +1394,9 @@ else:
     tab1, tab2, tab3 = st.tabs([
         "Apply — Organizations", "Apply — Medical Students", "Admin"
     ])
+
+# Load deadlines from DB (fallback to defaults)
+ORG_DEADLINE, STU_DEADLINE = get_deadlines(sb_admin or sb)
 
 with tab1:
     submitted, payload, uploads, name, email, phone = org_form()
