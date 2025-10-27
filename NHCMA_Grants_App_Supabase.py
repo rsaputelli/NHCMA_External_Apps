@@ -14,11 +14,11 @@ import secrets
 from itsdangerous import URLSafeTimedSerializer
 from streamlit_cookies_manager import EncryptedCookieManager
 
-# --- Build/Version Banner (always visible, no duplicates) ---
-# st.set_page_config(page_title=APP_TITLE, layout="wide", initial_sidebar_state="collapsed")
-
 APP_TITLE = "NHCMA Foundation — 2025 Public Health Innovation Grants"
 TIMEZONE = "America/New_York"
+
+--- Build/Version Banner (always visible, no duplicates) ---
+st.set_page_config(page_title=APP_TITLE, layout="wide", initial_sidebar_state="collapsed")
 
 APP_VERSION = os.environ.get("APP_VERSION", "")        # set in Streamlit env vars (optional)
 APP_COMMIT  = os.environ.get("APP_COMMIT", "")         # optional short SHA from git
@@ -65,6 +65,13 @@ def make_excel(df: pd.DataFrame) -> bytes:
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
             df.to_excel(writer, index=False, sheet_name="Submissions")
         return output.getvalue()
+
+def submission_notice():
+    st.info(
+        "📝 Please have all documentation ready before you begin. "
+        "You must complete and submit the application in one session; "
+        "if you leave before submitting, you will need to start over."
+    )
 
 # Deadlines (ET)
 ORG_DEADLINE = datetime(2025, 12, 27, 23, 59, tzinfo=ZoneInfo(TIMEZONE))
@@ -399,6 +406,7 @@ def _missing_org_fields(org_name, applicant_name, email, project_title):
 # ----------------------------
 def org_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]:
     st.subheader("Organization Application (2025)", anchor="org")
+    submission_notice()
     st.caption(
     f"Submission deadline: **{ORG_DEADLINE.strftime('%B %d, %Y at %I:%M %p %Z')}**\n\n_Required fields are marked with *_."
 )
@@ -486,6 +494,7 @@ def org_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]:
 
 def student_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]:
     st.subheader("Medical Student Application (2025)", anchor="stu")
+    submission_notice()
     st.caption(
     f"Submission deadline: **{STU_DEADLINE.strftime('%B %d, %Y at %I:%M %p %Z')}**\n\n_Required fields are marked with *_."
 )
@@ -597,7 +606,7 @@ def _admin_allowed() -> bool:
     with st.form("admin_login_form", clear_on_submit=False):
         st.subheader("Admin Sign‑in", anchor="admin-login")
         pwd = st.text_input("Enter admin password", type="password", key="admin_pwd")
-        ok = st.form_submit_button("Unlock Admin", use_container_width=False)
+        ok = st.form_submit_button("Unlock Admin", width='content')
     if ok:
         if pwd == ADMIN_PASSWORD:
             st.session_state["admin_ok"] = True
@@ -626,7 +635,7 @@ def admin_panel():
     # Single render (no duplicate below)
     st.dataframe(
         df,
-        use_container_width=True,
+        use_container_width='stretch',
         column_config={
             "Proposal URL": st.column_config.LinkColumn("Proposal URL"),
             "Budget URL":   st.column_config.LinkColumn("Budget URL"),
@@ -645,7 +654,7 @@ def admin_panel():
             file_name="nhcma_grants_submissions.csv",
             mime="text/csv",
             key="admin_dl_all_csv",
-            use_container_width=True,
+            use_container_width='stretch',
         )
     with col2:
         full_xlsx = make_excel(df)
@@ -655,7 +664,7 @@ def admin_panel():
             file_name="nhcma_grants_submissions.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key="admin_dl_all_xlsx",
-            use_container_width=True,
+            use_container_width='stretch',
         )
 
     # --- Scoring export (add URL columns) ---
@@ -676,7 +685,7 @@ def admin_panel():
 
     st.dataframe(
         export_df,
-        use_container_width=True,
+        use_container_width='stretch',
         column_config={
             "Proposal URL": st.column_config.LinkColumn("Proposal URL"),
             "Budget URL":   st.column_config.LinkColumn("Budget URL"),
@@ -693,7 +702,7 @@ def admin_panel():
             file_name="nhcma_grants_scoring_export.csv",
             mime="text/csv",
             key="admin_dl_scoring_csv",
-            use_container_width=True,
+            use_container_width='stretch',
         )
     with col4:
         scoring_xlsx = make_excel(export_df)
@@ -703,7 +712,7 @@ def admin_panel():
             file_name="nhcma_grants_scoring_export.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key="admin_dl_scoring_xlsx",
-            use_container_width=True,
+            use_container_width='stretch',
         )
 
     # --- Booklet Builder (Admin) ---
@@ -725,23 +734,18 @@ def admin_panel():
     col_a, col_b = st.columns([1, 1])
     with col_a:
         run_all = st.button("Build ALL Booklets Now", type="primary")
-    with col_b:
-        only_submitted = st.checkbox(
-            "Only rows with status = 'submitted'",
-            value=True
-        )
 
-    where = {"status": "submitted"} if only_submitted else None
+    # Optional future filter if 'status' column is implemented
+    # with col_b:
+    #     only_submitted = st.checkbox(
+    #         "Only rows with status = 'submitted'",
+    #         value=True
+    #     )
+    # where = {"status": "submitted"} if only_submitted else None
+
+    where = None  # currently build all rows
 
     if run_all:
-        # --- DEBUG probes ---
-        st.write("DEBUG – About to run build_all_booklets()", {"where": where})
-        # quick service-role sanity check (remove after):
-        try:
-            _probe = sb.table("submissions").select("id").limit(1).execute()
-            st.write("DEBUG – probe select ok:", _probe)
-        except Exception as e:
-            st.error(f"DEBUG – probe select failed: {e}")
 
         with st.spinner("Building DOCX booklets and uploading to Storage..."):
             report = build_all_booklets(sb, where=where, start_version=1)
@@ -749,10 +753,9 @@ def admin_panel():
         st.success("Done.")
         st.dataframe(report)
 
-        # TEMP: show individual errors inline
-        for i, r in enumerate(report, start=1):
-            if r.get("status") == "error":
-                st.error(f"[{i}] Upload/update failed: {r.get('error')}")
+        errors = [r for r in report if r.get("status") == "error"]
+        if errors:
+            st.warning(f"{len(errors)} booklet(s) failed to build. See logs for details.")
 
         ok = sum(1 for r in report if r.get("status") == "ok")
         err = sum(1 for r in report if r.get("status") == "error")
@@ -891,13 +894,13 @@ def admin_judging_tools(app_base_url: str | None = None):
                            n_scores=("total_points","count"))
                       .reset_index()
                       .sort_values(["track","avg_total","n_scores"], ascending=[True, False, False]))
-        st.dataframe(agg, use_container_width=True)
+        st.dataframe(agg, use_container_width='stretch')
         st.download_button(
             "Download Tally (CSV)",
             agg.to_csv(index=False).encode("utf-8"),
             "nhcma_scoring_tally.csv",
             "text/csv",
-            use_container_width=True,
+            use_container_width='stretch',
         )
 
     # ----------------------------
@@ -949,13 +952,13 @@ def admin_judging_tools(app_base_url: str | None = None):
         if "Judge" in sc.columns and "submission_id" in sc.columns:
             sc = sc.sort_values(["Judge","track","submission_id","submitted_at"], ascending=[True, True, True, True])
 
-        st.dataframe(sc[cols], use_container_width=True)
+        st.dataframe(sc[cols], use_container_width='stretch')
         st.download_button(
             "Download Detailed Scores (CSV)",
             sc[cols].to_csv(index=False).encode("utf-8"),
             "nhcma_detailed_scores.csv",
             "text/csv",
-            use_container_width=True,
+            use_container_width='stretch',
         )
 
 
@@ -1020,7 +1023,7 @@ def judging_portal():
     tracks_present = [t for t in ["student", "organization"] if t in set(df["track"].dropna().tolist())]
     if not tracks_present:
         st.info("Submissions table is present, but no recognized tracks ('student'/'organization') were found.")
-        st.dataframe(df, use_container_width=True)
+        st.dataframe(df, use_container_width='stretch')
         return
 
     default_track = tracks_present[0]
@@ -1040,7 +1043,7 @@ def judging_portal():
 
     st.dataframe(
         sdf[["id","Project Title","Org Name","School","Proposal URL","Budget URL"]].fillna(""),
-        use_container_width=True,
+        use_container_width='stretch',
         column_config={
             "Proposal URL": st.column_config.LinkColumn("Proposal URL"),
             "Budget URL":   st.column_config.LinkColumn("Budget URL"),
@@ -1069,7 +1072,7 @@ def judging_portal():
 
     if path and str(path).strip().lower() not in {"", "none", "null"}:
         url = make_signed_url(sb_srv, BUCKET_NAME, path, expires_in_seconds=24*3600)
-        st.link_button("⬇️ Download Booklet (DOCX)", url, use_container_width=True)
+        st.link_button("⬇️ Download Booklet (DOCX)", url, use_container_width='stretch')
     else:
         st.info("No booklet for this submission yet.")
 
@@ -1176,9 +1179,8 @@ def _consume_invite_from_query():
         st.success(f"Welcome, {who['name']}! You’re signed in.")
         st.rerun()
 
-    except Exception as e:
-        st.error("Could not process invite. Please try again.")
-        st.exception(e)
+    except Exception:
+        st.error("Could not process invite. Please try again or request a new invite link.")
 
 
 # Run resolver before any UI renders
@@ -1188,7 +1190,7 @@ _consume_invite_from_query()
 col_logo, col_title = st.columns([1, 5], vertical_alignment="center")
 with col_logo:
     if os.path.exists("assets/logo.jpg"):
-        st.image("assets/logo.jpg", use_container_width=True)
+        st.image("assets/logo.jpg", width='stretch')
     else:
         st.write("")  # blank if logo not present
 with col_title:
@@ -1196,12 +1198,12 @@ with col_title:
     st.write("**Grant Amount:** Up to $2,500 • **Submission Year:** 2025")
 
 # Instructions / Notice
-st.warning(
-    "Please have all documentation ready before you begin. "
-    "You must complete and submit the application in one session; "
-    "if you leave before submitting, you will need to start over.",
-    icon="📝"
-)
+# st.warning(
+    # "Please have all documentation ready before you begin. "
+    # "You must complete and submit the application in one session; "
+    # "if you leave before submitting, you will need to start over.",
+    # icon="📝"
+# )
 st.info(
     "Questions? Email the NHCMA Foundation at **nhcma@lutinemanagement.com**.",
     icon="✉️"
