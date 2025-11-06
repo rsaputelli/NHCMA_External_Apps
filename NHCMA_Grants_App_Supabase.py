@@ -1040,10 +1040,10 @@ def admin_judging_tools(app_base_url: str | None = None):
 
 
     # ----------------------------
-    # Scoring Tally (Averages)
+    # Scoring Tally (Ranked by Category)
     # ----------------------------
     st.divider()
-    st.subheader("Scoring Tally (Averages)")
+    st.subheader("Scoring Tally — Ranked by Category")
 
     try:
         s = sb_admin.table("scores").select("*").execute().data or []
@@ -1055,29 +1055,51 @@ def admin_judging_tools(app_base_url: str | None = None):
     if sc.empty or subs is None or subs.empty:
         st.info("No scores yet.")
     else:
+        # Merge scores with submission info (title, org/school, contact)
         merged = sc.merge(
-            subs[["id","track","Q: project_title","Q: org_name","Q: school"]].rename(
-                columns={
-                    "Q: project_title":"Project Title",
-                    "Q: org_name":"Org Name",
-                    "Q: school":"School"
-                }
-            ),
-            left_on=["submission_id","track"], right_on=["id","track"], how="left"
+            subs[
+                ["id","track","Q: project_title","Q: org_name","Q: school",
+                 "applicant_name","email","phone"]
+            ].rename(columns={
+                "id": "submission_id",
+                "Q: project_title": "Project Title",
+                "Q: org_name": "Org Name",
+                "Q: school": "School",
+            }),
+            on=["submission_id","track"], how="left"
         )
-        agg = (merged.groupby(["track","submission_id","Project Title","Org Name","School"])
+
+        # Aggregate averages
+        agg = (merged.groupby(
+                    ["track","submission_id","Project Title","Org Name","School",
+                     "applicant_name","email","phone"], dropna=False)
                       .agg(avg_total=("total_points","mean"),
                            n_scores=("total_points","count"))
-                      .reset_index()
-                      .sort_values(["track","avg_total","n_scores"], ascending=[True, False, False]))
-        st.dataframe(agg, use_container_width='stretch')
+                      .reset_index())
+
+        # Add rank per track
+        agg["Rank"] = agg.groupby("track")["avg_total"] \
+                         .rank(method="dense", ascending=False).astype(int)
+
+        agg = agg.sort_values(["track","Rank"], ascending=[True, True])
+
+        # Round for display
+        agg["avg_total"] = agg["avg_total"].round(2)
+
+        st.dataframe(
+            agg[["track","Rank","Project Title","Org Name","School",
+                 "applicant_name","email","phone","avg_total","n_scores"]],
+            use_container_width='stretch'
+        )
+
         st.download_button(
-            "Download Tally (CSV)",
+            "Download Ranked Tally (CSV)",
             agg.to_csv(index=False).encode("utf-8"),
-            "nhcma_scoring_tally.csv",
+            "nhcma_scoring_tally_ranked.csv",
             "text/csv",
             use_container_width='stretch',
         )
+
 
     # ----------------------------
     # Detailed Scores by Judge
