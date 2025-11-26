@@ -489,91 +489,72 @@ def build_confirmation_email(track: str, payload: Dict[str, Any], record_id: Opt
 
 # ========= Award / Decline Letter Builders =========
 
-def build_award_letter_html(submission: Dict[str, Any],
-                            president: Dict[str, str],
-                            amount: float) -> str:
-    """
-    Returns an HTML version of the NHCMA Award Letter for email delivery.
-    `submission`: one row from submissions table
-    `president`: dict from get_president_settings()
-    `amount`: amount awarded (float)
-    """
+def build_award_letter_html(sub: Dict[str, Any], pres: Dict[str, str], amount: float) -> str:
+    """Builds HTML for a funded grant decision using normalized keys."""
 
-    applicant_name = submission.get("contact_name", "")
-    project_title  = submission.get("project_title", "")
-    org_name       = submission.get("org_name", "")
+    applicant = sub.get("applicant_name") or "Applicant"
+    project = sub.get("project_title") or "your project"
+    org = sub.get("org_name") or None
+    school = sub.get("school") or None
 
-    # Format amount with commas
-    amt = f"${amount:,.0f}"
+    award_amt = f"${amount:,.0f}"
 
-    return f"""
-    <p>Dear {applicant_name},</p>
+    lines = [
+        f"<p>Dear {applicant},</p>",
 
-    <p>
-        On behalf of the New Haven County Medical Association Foundation, 
-        I am pleased to inform you that your proposal titled 
-        <strong>{project_title}</strong> has been selected for funding in the 
-        amount of <strong>{amt}</strong>.
-    </p>
+        "<p>On behalf of the "
+        "<strong>NHCMA Foundation — 2025 Public Health Innovation Grants</strong>, "
+        "we are pleased to inform you that your proposal has been <strong>selected for funding</strong>.</p>",
 
-    <p>
-        The Foundation Board was impressed with the quality of your submission 
-        and the impact your project will have on improving the health of residents 
-        across New Haven County.
-    </p>
+        f"<p><strong>Award Amount:</strong> {award_amt}</p>",
 
-    <p>
-        A member of our administrative team will follow up shortly regarding 
-        next steps for release of funds and reporting requirements.
-    </p>
+        "<p><strong>Proposal Details:</strong><br>"
+        f"<strong>Project Title:</strong> {project}<br>"
+        f"{f'<strong>Organization:</strong> {org}<br>' if org else ''}"
+        f"{f'<strong>School:</strong> {school}<br>' if school else ''}"
+        "</p>",
 
-    <p>Sincerely,<br>
-        {president['name']}<br>
-        {president['title']}<br>
-        New Haven County Medical Association Foundation
-    </p>
-    """
+        "<p>We offer our congratulations and look forward to the impact your work will make "
+        "in advancing public health in our community.</p>",
 
+        f"<p>Sincerely,<br>{pres.get('president_name','NHCMA Foundation President')}<br>"
+        f"{pres.get('president_title','President')}<br>"
+        "NHCMA Foundation</p>"
+    ]
 
-def build_decline_letter_html(submission: Dict[str, Any],
-                              president: Dict[str, str]) -> str:
-    """
-    Returns an HTML version of the Decline Letter for email delivery.
-    `submission`: one row from submissions table
-    `president`: dict from get_president_settings()
-    """
+    return "\n".join(lines)
 
-    applicant_name = submission.get("contact_name", "")
-    project_title  = submission.get("project_title", "")
+def build_decline_letter_html(sub: Dict[str, Any], pres: Dict[str, str]) -> str:
+    """Builds HTML for a declined grant decision using normalized keys."""
 
-    return f"""
-    <p>Dear {applicant_name},</p>
+    applicant = sub.get("applicant_name") or "Applicant"
+    project = sub.get("project_title") or "your project"
+    org = sub.get("org_name") or None
+    school = sub.get("school") or None
 
-    <p>
-        Thank you for submitting your proposal titled 
-        <strong>{project_title}</strong> to the 
-        New Haven County Medical Association Foundation’s Public Health 
-        Innovation Grants program.
-    </p>
+    lines = [
+        f"<p>Dear {applicant},</p>",
+        "<p>Thank you for submitting your proposal to the "
+        "<strong>NHCMA Foundation — 2025 Public Health Innovation Grants</strong>.</p>",
 
-    <p>
-        This year, we received a large number of strong and worthy applications. 
-        After careful review, we regret to inform you that your submission 
-        was not selected for funding. 
-    </p>
+        "<p>After a careful review of all submitted applications, "
+        "we regret to inform you that your proposal was not selected for funding.</p>",
 
-    <p>
-        We encourage you to consider reapplying in future cycles, as your work 
-        contributes meaningfully to the health of our community.
-    </p>
+        "<p><strong>Proposal Details:</strong><br>"
+        f"<strong>Project Title:</strong> {project}<br>"
+        f"{f'<strong>Organization:</strong> {org}<br>' if org else ''}"
+        f"{f'<strong>School:</strong> {school}<br>' if school else ''}"
+        "</p>",
 
-    <p>Sincerely,<br>
-        {president['name']}<br>
-        {president['title']}<br>
-        New Haven County Medical Association Foundation
-    </p>
-    """
+        "<p>Please know that the decision does not diminish the importance of "
+        "the work you are doing. We encourage you to consider reapplying in a future cycle.</p>",
 
+        f"<p>Sincerely,<br>{pres.get('president_name','NHCMA Foundation President')}<br>"
+        f"{pres.get('president_title','President')}<br>"
+        "NHCMA Foundation</p>"
+    ]
+
+    return "\n".join(lines)
 
 def html_to_pdf_bytes(html: str) -> bytes:
     """
@@ -970,94 +951,131 @@ def admin_panel():
         },
     )
 
-    st.markdown("#### Select a submission to update decision")
+st.markdown("#### Select a submission to update decision")
 
-    submission_ids = df["id"].astype(str).tolist()
-    selected_id = st.selectbox("Submission ID", submission_ids)
+submission_ids = df["id"].astype(str).tolist()
+selected_id = st.selectbox("Submission ID", submission_ids)
 
-    if selected_id:
-        # Fetch submission row
-        sub_row = (
-            df[df["id"].astype(str) == selected_id]
-            .iloc[0]
-            .to_dict()
+if selected_id:
+    # -----------------------------
+    # Fetch + Flatten Submission Row
+    # -----------------------------
+    raw_row = (
+        df[df["id"].astype(str) == selected_id]
+        .iloc[0]
+        .to_dict()
+    )
+
+    payload = raw_row.get("payload_json", {}) or {}
+
+    # Flatten top-level + payload_json, normalize keys
+    sub_row_flat = {
+        **{k.lower().replace(" ", "_"): v for k, v in raw_row.items()},
+        **{k.lower().replace(" ", "_"): v for k, v in payload.items()},
+    }
+
+    pres = get_president_settings(sb_admin)
+    current = decisions.get(selected_id)
+
+    # -----------------------------
+    # Display summary info
+    # -----------------------------
+    applicant_display = (
+        sub_row_flat.get("applicant_name")
+        or sub_row_flat.get("name")
+        or "Applicant"
+    )
+
+    project_display = (
+        sub_row_flat.get("project_title")
+        or sub_row_flat.get("title")
+        or "Untitled Project"
+    )
+
+    st.write(
+        f"**Applicant:** {applicant_display}  \n"
+        f"**Project:** {project_display}"
+    )
+
+    # -----------------------------
+    # Decision controls
+    # -----------------------------
+    decision_choice = st.radio(
+        "Decision",
+        ["funded", "declined"],
+        index=0 if current and current["decision"] == "funded" else 1,
+    )
+
+    amount_val = None
+    if decision_choice == "funded":
+        amount_val = st.number_input(
+            "Award Amount",
+            min_value=0.0,
+            value=float(current["amount_awarded"])
+                if current and current["amount_awarded"] else 2500.0,
+            step=100.0,
         )
 
-        pres = get_president_settings(sb_admin)
-        current = decisions.get(selected_id)
-
-        st.write(
-            f"**Applicant:** {sub_row.get('contact_name')}  \n"
-            f"**Project:** {sub_row.get('project_title')}"
+    if st.button("Save Decision"):
+        set_decision(
+            sb_write,
+            selected_id,
+            decision_choice,
+            amount_val if decision_choice == "funded" else None,
         )
+        st.success("Decision saved.")
+        st.experimental_rerun()
 
-        decision_choice = st.radio(
-            "Decision",
-            ["funded", "declined"],
-            index=0 if current and current["decision"] == "funded" else 1
+    st.markdown("---")
+    st.markdown("#### Generate & Send Notification")
+
+    # -----------------------------
+    # Build letter using flattened row
+    # -----------------------------
+    if decision_choice == "funded":
+        html = build_award_letter_html(sub_row_flat, pres, amount_val)
+    else:
+        html = build_decline_letter_html(sub_row_flat, pres)
+
+    st.markdown("Preview below:")
+    st.markdown(html, unsafe_allow_html=True)
+
+    # -----------------------------
+    # Send Email
+    # -----------------------------
+    if st.button("Send Email Notification"):
+        try:
+            msg = EmailMessage()
+            msg["Subject"] = "NHCMA Foundation — Grant Decision"
+            msg["From"] = pres["email"]
+            msg["To"] = sub_row_flat.get("email")
+            msg.set_content("Your email client does not support HTML.")
+            msg.add_alternative(html, subtype="html")
+
+            smtp = smtplib.SMTP(
+                os.environ.get("SMTP_HOST"),
+                int(os.environ.get("SMTP_PORT")),
+            )
+            smtp.starttls()
+            smtp.login(os.environ.get("SMTP_USER"), os.environ.get("SMTP_PASS"))
+            smtp.send_message(msg)
+            smtp.quit()
+
+            st.success("Email sent successfully!")
+        except Exception as e:
+            st.error(f"Error sending email: {e}")
+
+    # -----------------------------
+    # Download PDF
+    # -----------------------------
+    if st.button("Download PDF Letter"):
+        pdf_bytes = html_to_pdf_bytes(html)
+        st.download_button(
+            label="Download PDF",
+            data=pdf_bytes,
+            file_name=f"Grant_Decision_{selected_id}.pdf",
+            mime="application/pdf",
         )
-
-        amount_val = None
-        if decision_choice == "funded":
-            amount_val = st.number_input(
-                "Award Amount",
-                min_value=0.0,
-                value=float(current["amount_awarded"]) if current and current["amount_awarded"] else 2500.0,
-                step=100.0
-            )
-
-        if st.button("Save Decision"):
-            set_decision(
-                sb_write,
-                selected_id,
-                decision_choice,
-                amount_val if decision_choice == "funded" else None,
-            )
-            st.success("Decision saved.")
-            st.experimental_rerun()
-
-        st.markdown("---")
-
-        st.markdown("#### Generate & Send Notification")
-
-        if decision_choice == "funded":
-            html = build_award_letter_html(sub_row, pres, amount_val)
-        else:
-            html = build_decline_letter_html(sub_row, pres)
-
-        st.markdown("Preview below:")
-        st.markdown(html, unsafe_allow_html=True)
-
-        if st.button("Send Email Notification"):
-            try:
-                msg = EmailMessage()
-                msg["Subject"] = "NHCMA Foundation — Grant Decision"
-                msg["From"] = pres["email"]
-                msg["To"] = sub_row["email"]
-                msg.set_content("Your email client does not support HTML.")
-                msg.add_alternative(html, subtype="html")
-
-                smtp = smtplib.SMTP(
-                    os.environ.get("SMTP_HOST"),
-                    int(os.environ.get("SMTP_PORT")),
-                )
-                smtp.starttls()
-                smtp.login(os.environ.get("SMTP_USER"), os.environ.get("SMTP_PASS"))
-                smtp.send_message(msg)
-                smtp.quit()
-
-                st.success("Email sent successfully!")
-            except Exception as e:
-                st.error(f"Error sending email: {e}")
-
-        if st.button("Download PDF Letter"):
-            pdf_bytes = html_to_pdf_bytes(html)
-            st.download_button(
-                label="Download PDF",
-                data=pdf_bytes,
-                file_name=f"Grant_Decision_{selected_id}.pdf",
-                mime="application/pdf",
-            )
 
     # --- Booklet Builder (Admin) ---
     st.divider()
