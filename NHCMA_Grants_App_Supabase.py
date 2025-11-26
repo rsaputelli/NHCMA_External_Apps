@@ -998,63 +998,63 @@ def admin_panel():
             .to_dict()
         )
 
-    payload = raw_row.get("payload_json", {}) or {}
+        payload = raw_row.get("payload_json", {}) or {}
 
-    # Start with full lowercase normalized dict
-    sub_row_flat = {k.lower(): v for k, v in raw_row.items()}
-    sub_row_flat.update({k.lower(): v for k, v in payload.items()})
+        # Start with full lowercase normalized dict
+        sub_row_flat = {k.lower(): v for k, v in raw_row.items()}
+        sub_row_flat.update({k.lower(): v for k, v in payload.items()})
 
-    # ---- Canonical field wiring using real schema ----
+        # ---- Canonical field wiring using real schema ----
 
-    # Applicant name
-    sub_row_flat["applicant_name"] = (
-        payload.get("applicant_name")
-        or raw_row.get("applicant_name")
-        or ""
-    )
+        # Applicant name
+        sub_row_flat["applicant_name"] = (
+            payload.get("applicant_name")
+            or raw_row.get("applicant_name")
+            or ""
+        )
 
-    # Email
-    sub_row_flat["email"] = (
-        payload.get("email")
-        or raw_row.get("email")
-        or ""
-    )
+        # Email
+        sub_row_flat["email"] = (
+            payload.get("email")
+            or raw_row.get("email")
+            or ""
+        )
 
-    # Project title
-    sub_row_flat["project_title"] = (
-        payload.get("project_title")
-        or raw_row.get("project_title")
-        or ""
-    )
+        # Project title
+        sub_row_flat["project_title"] = (
+            payload.get("project_title")
+            or raw_row.get("project_title")
+            or ""
+        )
 
-    # Applicant category (student / organization)
-    sub_row_flat["applicant_category"] = (
-        payload.get("applicant_category")
-        or raw_row.get("applicant_category")
-        or ""
-    )
+        # Applicant category (student / organization)
+        sub_row_flat["applicant_category"] = (
+            payload.get("applicant_category")
+            or raw_row.get("applicant_category")
+            or ""
+        )
 
-    # Program field (your schema included this)
-    sub_row_flat["program"] = (
-        payload.get("program")
-        or raw_row.get("program")
-        or ""
-    )
+        # Program field (your schema included this)
+        sub_row_flat["program"] = (
+            payload.get("program")
+            or raw_row.get("program")
+            or ""
+        )
 
-    # Org name (optional)
-    sub_row_flat["org_name"] = (
-        payload.get("org_name")
-        or raw_row.get("org_name")
-        or ""
-    )
+        # Org name (optional)
+        sub_row_flat["org_name"] = (
+            payload.get("org_name")
+            or raw_row.get("org_name")
+            or ""
+        )
 
-    # School (optional)
-    sub_row_flat["school"] = (
-        payload.get("school")
-        or raw_row.get("school")
-        or ""
-    )
-    # ---- End Canonical wiring ----
+        # School (optional)
+        sub_row_flat["school"] = (
+            payload.get("school")
+            or raw_row.get("school")
+            or ""
+        )
+        # ---- End Canonical wiring ----
 
         # -----------------------------
         # Decision controls
