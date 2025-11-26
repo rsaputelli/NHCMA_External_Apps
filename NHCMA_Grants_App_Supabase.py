@@ -1018,37 +1018,29 @@ def admin_panel():
 
         # Normalize keys to lowercase for convenience
         raw_lower = {k.lower(): v for k, v in raw_row.items()}
-        payload_lower = {k.lower(): v for k, v in payload.items()}
 
-        # ---- Normalize Q: fields so letters can use clean keys ----
+        # Normalize payload to lowercase AND include cleaned Q: fields
+        payload_lower = {k.lower(): v for k, v in payload.items()}
         for k, v in payload.items():
             if k.startswith("Q:"):
                 clean = k.replace("Q:", "").strip().lower()
                 payload_lower[clean] = v
 
-        # Build merged row
+        # Merge
         sub_row_flat = {**raw_lower, **payload_lower}
 
         # Applicant Name
         sub_row_flat["applicant_name"] = (
-            payload_lower.get("applicant_name")
-            or raw_lower.get("applicant_name")
-            or ""
+            payload_lower.get("applicant_name") or raw_lower.get("applicant_name") or ""
         )
 
         # Project Title
         sub_row_flat["project_title"] = (
-            payload_lower.get("project_title")
-            or raw_lower.get("project_title")
-            or ""
+            payload_lower.get("project_title") or raw_lower.get("project_title") or ""
         )
 
-        # Applicant Category = track (schema)
-        sub_row_flat["applicant_category"] = (
-            raw_lower.get("track")
-            or payload_lower.get("applicant_category")
-            or ""
-        )
+        # Track
+        sub_row_flat["applicant_category"] = raw_lower.get("track", "")
 
         # Program
         sub_row_flat["program"] = (
