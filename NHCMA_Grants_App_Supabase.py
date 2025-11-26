@@ -999,17 +999,16 @@ def admin_panel():
         )
 
         payload = raw_row.get("payload_json", {}) or {}
-        
-            # DEBUG - SHOW EXACT FIELDS
-        st.write("### DEBUG: raw_row keys")
-        st.json(list(raw_row.keys()))
+    
+        payload = raw_row.get("payload_json", {}) or {}
 
-        st.write("### DEBUG: payload_json keys")
-        st.json(list(payload.keys()))
+        # ===================== DEBUG DUMP =====================
+        st.markdown("### DEBUG — raw_row")
+        st.json(raw_row)
 
-        st.write("### DEBUG: payload_json contents")
+        st.markdown("### DEBUG — payload_json")
         st.json(payload)
-
+        # ======================================================
 
         # Start with full lowercase normalized dict
         sub_row_flat = {k.lower(): v for k, v in raw_row.items()}
