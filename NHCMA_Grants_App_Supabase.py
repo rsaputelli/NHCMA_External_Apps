@@ -1006,56 +1006,42 @@ def admin_panel():
 
         # ---- Canonical field wiring using real schema ----
 
-        # Applicant name
+        # Applicant name (always present)
         sub_row_flat["applicant_name"] = (
-            payload.get("applicant_name")
-            or raw_row.get("applicant_name")
+            raw_row.get("applicant_name")
+            or payload.get("applicant_name")
             or ""
         )
 
         # Email
         sub_row_flat["email"] = (
-            payload.get("email")
-            or raw_row.get("email")
+            raw_row.get("email")
+            or payload.get("email")
             or ""
         )
 
-        # Project title
+        # Category / Track (organization or student)
+        sub_row_flat["applicant_category"] = (
+            raw_row.get("track")
+            or payload.get("track")
+            or ""
+        )
+
+        # Project Title (stored only in payload_json)
         sub_row_flat["project_title"] = (
             payload.get("project_title")
-            or raw_row.get("project_title")
             or ""
         )
 
-        # Applicant category (student / organization)
-        sub_row_flat["applicant_category"] = (
-            payload.get("applicant_category")
-            or raw_row.get("applicant_category")
+        # Optional phone
+        sub_row_flat["phone"] = (
+            raw_row.get("phone")
+            or payload.get("phone")
             or ""
         )
 
-        # Program field
-        sub_row_flat["program"] = (
-            payload.get("program")
-            or raw_row.get("program")
-            or ""
-        )
-
-        # Org name (optional)
-        sub_row_flat["org_name"] = (
-            payload.get("org_name")
-            or raw_row.get("org_name")
-            or ""
-        )
-
-        # School (optional)
-        sub_row_flat["school"] = (
-            payload.get("school")
-            or raw_row.get("school")
-            or ""
-        )
-
-        # ---- End Canonical wiring ----
+        # No program/program_name field in schema — remove that mapping entirely
+        # ---- End Canonical Wiring ----
 
         pres = get_president_settings(sb_admin)
         current = decisions.get(selected_id)
