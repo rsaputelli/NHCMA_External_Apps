@@ -998,66 +998,63 @@ def admin_panel():
             .to_dict()
         )
 
-        payload = raw_row.get("payload_json", {}) or {}
+    payload = raw_row.get("payload_json", {}) or {}
 
-        # Flatten top-level + payload_json, normalize keys
-        sub_row_flat = {
-            **{k.lower().replace(" ", "_"): v for k, v in raw_row.items()},
-            **{k.lower().replace(" ", "_"): v for k, v in payload.items()},
-        }
+    # Start with full lowercase normalized dict
+    sub_row_flat = {k.lower(): v for k, v in raw_row.items()}
+    sub_row_flat.update({k.lower(): v for k, v in payload.items()})
 
-        # ---- Canonical field wiring so letters always get these keys ----
-        # Project title: prefer the human-facing column if present
-        project_title = (
-            raw_row.get("Project Title")
-            or payload.get("project_title")
-            or payload.get("Project Title")
-        )
-        if project_title:
-            sub_row_flat["project_title"] = project_title
+    # ---- Canonical field wiring using real schema ----
 
-        # Applicant category: if you used 'Applicant Category' or similar
-        applicant_category = (
-            raw_row.get("Applicant Category")
-            or payload.get("applicant_category")
-            or payload.get("Applicant Category")
-        )
-        if applicant_category:
-            sub_row_flat["applicant_category"] = applicant_category
+    # Applicant name
+    sub_row_flat["applicant_name"] = (
+        payload.get("applicant_name")
+        or raw_row.get("applicant_name")
+        or ""
+    )
 
-        # Program name, if you have a specific field for it
-        program_name = (
-            raw_row.get("Program")
-            or payload.get("program")
-            or payload.get("Program")
-        )
-        if program_name:
-            sub_row_flat["program"] = program_name
-        # ---- /Canonical field wiring ----
+    # Email
+    sub_row_flat["email"] = (
+        payload.get("email")
+        or raw_row.get("email")
+        or ""
+    )
 
-        pres = get_president_settings(sb_admin)
-        current = decisions.get(selected_id)
+    # Project title
+    sub_row_flat["project_title"] = (
+        payload.get("project_title")
+        or raw_row.get("project_title")
+        or ""
+    )
 
+    # Applicant category (student / organization)
+    sub_row_flat["applicant_category"] = (
+        payload.get("applicant_category")
+        or raw_row.get("applicant_category")
+        or ""
+    )
 
-        # -----------------------------
-        # Display summary info
-        # -----------------------------
-        applicant_display = (
-            sub_row_flat.get("applicant_name")
-            or sub_row_flat.get("name")
-            or "Applicant"
-        )
+    # Program field (your schema included this)
+    sub_row_flat["program"] = (
+        payload.get("program")
+        or raw_row.get("program")
+        or ""
+    )
 
-        project_display = (
-            sub_row_flat.get("project_title")
-            or sub_row_flat.get("title")
-            or "Untitled Project"
-        )
+    # Org name (optional)
+    sub_row_flat["org_name"] = (
+        payload.get("org_name")
+        or raw_row.get("org_name")
+        or ""
+    )
 
-        st.write(
-            f"**Applicant:** {applicant_display}  \n"
-            f"**Project:** {project_display}"
-        )
+    # School (optional)
+    sub_row_flat["school"] = (
+        payload.get("school")
+        or raw_row.get("school")
+        or ""
+    )
+    # ---- End Canonical wiring ----
 
         # -----------------------------
         # Decision controls
