@@ -498,8 +498,9 @@ def build_award_letter_html(sub: Dict[str, Any], pres: Dict[str, str], amount: f
     program = sub.get("program") or ""
     award_amt = f"${amount:,.2f}"
 
-    pres_name = pres.get("president_name", "NHCMA Foundation President")
-    pres_title = pres.get("president_title", "President")
+    # NOTE: use 'name' and 'title' which is what get_president_settings returns
+    pres_name = pres.get("name", "NHCMA Foundation President")
+    pres_title = pres.get("title", "President")
 
     lines = [
         f"<p>Dear {applicant},</p>",
@@ -542,8 +543,9 @@ def build_decline_letter_html(sub: Dict[str, Any], pres: Dict[str, str]) -> str:
     project = sub.get("project_title") or "your project"
     category = sub.get("applicant_category") or ""
 
-    pres_name = pres.get("president_name", "NHCMA Foundation President")
-    pres_title = pres.get("president_title", "President")
+    # NOTE: same key fix here
+    pres_name = pres.get("name", "NHCMA Foundation President")
+    pres_title = pres.get("title", "President")
 
     lines = [
         f"<p>Dear {applicant},</p>",
@@ -571,7 +573,6 @@ def build_decline_letter_html(sub: Dict[str, Any], pres: Dict[str, str]) -> str:
     ]
 
     return "\n".join(lines)
-
 
 def html_to_pdf_bytes(html: str) -> bytes:
     """
@@ -1005,8 +1006,38 @@ def admin_panel():
             **{k.lower().replace(" ", "_"): v for k, v in payload.items()},
         }
 
+        # ---- Canonical field wiring so letters always get these keys ----
+        # Project title: prefer the human-facing column if present
+        project_title = (
+            raw_row.get("Project Title")
+            or payload.get("project_title")
+            or payload.get("Project Title")
+        )
+        if project_title:
+            sub_row_flat["project_title"] = project_title
+
+        # Applicant category: if you used 'Applicant Category' or similar
+        applicant_category = (
+            raw_row.get("Applicant Category")
+            or payload.get("applicant_category")
+            or payload.get("Applicant Category")
+        )
+        if applicant_category:
+            sub_row_flat["applicant_category"] = applicant_category
+
+        # Program name, if you have a specific field for it
+        program_name = (
+            raw_row.get("Program")
+            or payload.get("program")
+            or payload.get("Program")
+        )
+        if program_name:
+            sub_row_flat["program"] = program_name
+        # ---- /Canonical field wiring ----
+
         pres = get_president_settings(sb_admin)
         current = decisions.get(selected_id)
+
 
         # -----------------------------
         # Display summary info
