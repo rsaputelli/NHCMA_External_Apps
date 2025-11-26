@@ -494,67 +494,84 @@ def build_award_letter_html(sub: Dict[str, Any], pres: Dict[str, str], amount: f
 
     applicant = sub.get("applicant_name") or "Applicant"
     project = sub.get("project_title") or "your project"
-    org = sub.get("org_name") or None
-    school = sub.get("school") or None
+    category = sub.get("applicant_category") or ""
+    program = sub.get("program") or ""
+    award_amt = f"${amount:,.2f}"
 
-    award_amt = f"${amount:,.0f}"
+    pres_name = pres.get("president_name", "NHCMA Foundation President")
+    pres_title = pres.get("president_title", "President")
 
     lines = [
         f"<p>Dear {applicant},</p>",
 
-        "<p>On behalf of the "
-        "<strong>NHCMA Foundation — 2025 Public Health Innovation Grants</strong>, "
-        "we are pleased to inform you that your proposal has been <strong>selected for funding</strong>.</p>",
+        (
+            "<p>Congratulations on being awarded a grant from the "
+            "<strong>New Haven County Medical Association Foundation</strong> "
+            f"for the program titled “{project}{f', {program}' if program else ''}.” "
+            f"This grant, in the category of “{category}”, has been awarded to support "
+            "your efforts and contributions in this field.</p>"
+        ),
 
-        f"<p><strong>Award Amount:</strong> {award_amt}</p>",
+        f"<p><strong>The awarded grant amount is {award_amt}.</strong></p>",
 
-        "<p><strong>Proposal Details:</strong><br>"
-        f"<strong>Project Title:</strong> {project}<br>"
-        f"{f'<strong>Organization:</strong> {org}<br>' if org else ''}"
-        f"{f'<strong>School:</strong> {school}<br>' if school else ''}"
-        "</p>",
+        (
+            "<p>As a grant recipient, we kindly ask you to plan to attend the "
+            "NHCMA Annual Meeting in the 4th quarter of next year, where you will have the opportunity "
+            "to present the results of your funded project. More details will be sent as the date is finalized.</p>"
+        ),
 
-        "<p>We offer our congratulations and look forward to the impact your work will make "
-        "in advancing public health in our community.</p>",
+        (
+            "<p>Please note that checks will be mailed within the next week. "
+            "To ensure we have the correct mailing address, kindly email your preferred address to the "
+            "NHCMA staff at <a href='mailto:NHCMA@lutinemanagement.com'>NHCMA@lutinemanagement.com</a>.</p>"
+        ),
 
-        f"<p>Sincerely,<br>{pres.get('president_name','NHCMA Foundation President')}<br>"
-        f"{pres.get('president_title','President')}<br>"
-        "NHCMA Foundation</p>"
+        "<p>Please feel free to reach out for any further assistance or clarification. "
+        "We look forward to seeing the impactful results of your work.</p>",
+
+        f"<p>Sincerely,<br>{pres_name}<br>{pres_title}<br>NHCMA Foundation</p>"
     ]
 
     return "\n".join(lines)
+
 
 def build_decline_letter_html(sub: Dict[str, Any], pres: Dict[str, str]) -> str:
     """Builds HTML for a declined grant decision using normalized keys."""
 
     applicant = sub.get("applicant_name") or "Applicant"
     project = sub.get("project_title") or "your project"
-    org = sub.get("org_name") or None
-    school = sub.get("school") or None
+    category = sub.get("applicant_category") or ""
+
+    pres_name = pres.get("president_name", "NHCMA Foundation President")
+    pres_title = pres.get("president_title", "President")
 
     lines = [
         f"<p>Dear {applicant},</p>",
-        "<p>Thank you for submitting your proposal to the "
-        "<strong>NHCMA Foundation — 2025 Public Health Innovation Grants</strong>.</p>",
 
-        "<p>After a careful review of all submitted applications, "
-        "we regret to inform you that your proposal was not selected for funding.</p>",
+        (
+            "<p>Thank you for submitting your proposal to the "
+            "<strong>NHCMA Foundation — 2025 Public Health Innovation Grants</strong>. "
+            "This year we received a large number of thoughtful and high-quality applications.</p>"
+        ),
 
-        "<p><strong>Proposal Details:</strong><br>"
-        f"<strong>Project Title:</strong> {project}<br>"
-        f"{f'<strong>Organization:</strong> {org}<br>' if org else ''}"
-        f"{f'<strong>School:</strong> {school}<br>' if school else ''}"
-        "</p>",
+        (
+            "<p>After a careful and competitive review process, we regret to inform you that your proposal "
+            "was not selected for funding. Unfortunately, we are not able to fund all worthy projects, "
+            "and many strong applications could not be supported this cycle.</p>"
+        ),
 
-        "<p>Please know that the decision does not diminish the importance of "
-        "the work you are doing. We encourage you to consider reapplying in a future cycle.</p>",
+        (
+            f"<p>Your proposal, titled “{project}”, reflected meaningful work, "
+            "and we strongly encourage you to consider reapplying in a future cycle.</p>"
+        ),
 
-        f"<p>Sincerely,<br>{pres.get('president_name','NHCMA Foundation President')}<br>"
-        f"{pres.get('president_title','President')}<br>"
-        "NHCMA Foundation</p>"
+        "<p>We appreciate your commitment to advancing public health in our community.</p>",
+
+        f"<p>Sincerely,<br>{pres_name}<br>{pres_title}<br>NHCMA Foundation</p>"
     ]
 
     return "\n".join(lines)
+
 
 def html_to_pdf_bytes(html: str) -> bytes:
     """
