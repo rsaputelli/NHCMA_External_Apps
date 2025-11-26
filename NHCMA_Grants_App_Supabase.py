@@ -837,6 +837,20 @@ def admin_panel():
         st.info("No submissions yet.")
         return
 
+    # ===== Anchor #DF_ID_RESTORE =====
+    # Ensure the 'id' column always exists — flattening can drop it
+    if "id" not in df.columns:
+        # Attempt recovery from index if flattening reset it
+        if df.index.name == "id":
+            df = df.reset_index()
+        else:
+            st.error("Internal error: Missing 'id' column in submissions dataset.")
+            st.stop()
+
+    # Guarantee that id is always int for consistent mapping
+    df["id"] = df["id"].astype(int)
+    # ===== /Anchor #DF_ID_RESTORE =====
+
     # Convert to Edge links before display
     for col in ["Proposal URL", "Budget URL", "Other URL"]:
         if col in df.columns:
