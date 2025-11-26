@@ -999,58 +999,90 @@ def admin_panel():
         )
 
         payload = raw_row.get("payload_json", {}) or {}
-    
-        payload = raw_row.get("payload_json", {}) or {}
 
         # ===================== DEBUG DUMP =====================
-        st.markdown("### DEBUG — raw_row")
-        st.json(raw_row)
+        # st.markdown("### DEBUG — raw_row")
+        # st.json(raw_row)
 
-        st.markdown("### DEBUG — payload_json")
-        st.json(payload)
+        # st.markdown("### DEBUG — payload_json")
+        # st.json(payload)
         # ======================================================
 
         # Start with full lowercase normalized dict
         sub_row_flat = {k.lower(): v for k, v in raw_row.items()}
         sub_row_flat.update({k.lower(): v for k, v in payload.items()})
 
-        # ---- Canonical field wiring using real schema ----
+        # -----------------------------
+        # Canonical field wiring (FINAL, based on actual schema)
+        # -----------------------------
 
-        # Applicant name (always present)
+        # Normalize keys to lowercase for convenience
+        raw_lower = {k.lower(): v for k, v in raw_row.items()}
+        payload_lower = {k.lower(): v for k, v in payload.items()}
+
+        # Build merged row
+        sub_row_flat = {**raw_lower, **payload_lower}
+
+        # Applicant Name
         sub_row_flat["applicant_name"] = (
-            raw_row.get("applicant_name")
-            or payload.get("applicant_name")
+            payload.get("Q: applicant_name")
+            or payload.get("Q: applicant_name ".lower())   # sometimes trailing space
+            or raw_row.get("applicant_name")
             or ""
         )
 
         # Email
         sub_row_flat["email"] = (
-            raw_row.get("email")
-            or payload.get("email")
+            payload.get("Q: email")
+            or raw_row.get("email")
             or ""
         )
 
-        # Category / Track (organization or student)
+        # Phone
+        sub_row_flat["phone"] = (
+            payload.get("Q: phone")
+            or raw_row.get("phone")
+            or ""
+        )
+
+        # Project Title (the actual key)
+        sub_row_flat["project_title"] = (
+            payload.get("Q: project_title")
+            or payload.get("Q: project_title ".lower())
+            or ""
+        )
+
+        # Category → track
         sub_row_flat["applicant_category"] = (
             raw_row.get("track")
-            or payload.get("track")
             or ""
         )
 
-        # Project Title (stored only in payload_json)
-        sub_row_flat["project_title"] = (
-            payload.get("project_title")
+        # Program (if ever used)
+        sub_row_flat["program"] = (
+            payload.get("Q: program")
+            or raw_row.get("program")
             or ""
         )
 
-        # Optional phone
-        sub_row_flat["phone"] = (
-            raw_row.get("phone")
-            or payload.get("phone")
+        # School (student applications)
+        sub_row_flat["school"] = (
+            payload.get("Q: school")
             or ""
         )
 
-        # No program/program_name field in schema — remove that mapping entirely
+        # Org Name (organization applications)
+        sub_row_flat["org_name"] = (
+            payload.get("Q: org_name")
+            or ""
+        )
+
+        # Budget Total
+        sub_row_flat["budget_total"] = (
+            payload.get("Q: budget_total")
+            or ""
+        )
+
         # ---- End Canonical Wiring ----
 
         pres = get_president_settings(sb_admin)
