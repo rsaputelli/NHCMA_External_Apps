@@ -950,7 +950,7 @@ def admin_panel():
     st.divider()
     st.subheader("Grant Funding Decisions")
 
-    decisions = get_all_decisions(sb_read)
+    decisions = get_all_decisions(sb_admin)
 
     # Merge decisions into df for convenience
     df["decision"] = df["id"].astype(str).map(
@@ -983,7 +983,7 @@ def admin_panel():
             .to_dict()
         )
 
-        pres = get_president_settings(sb_read)
+        pres = get_president_settings(sb_admin)
         current = decisions.get(selected_id)
 
         st.write(
@@ -1111,7 +1111,7 @@ def admin_panel():
     st.divider()
     with st.expander("🖋️ President Contact for Letters", expanded=False):
 
-        pres = get_president_settings(sb_read)
+        pres = get_president_settings(sb_admin)
 
         colA, colB = st.columns(2)
         with colA:
