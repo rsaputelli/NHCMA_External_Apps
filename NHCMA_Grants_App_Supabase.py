@@ -1034,10 +1034,16 @@ def admin_panel():
             payload_lower.get("applicant_name") or raw_lower.get("applicant_name") or ""
         )
 
-        # Project Title
-        sub_row_flat["project_title"] = (
-            payload_lower.get("project_title") or raw_lower.get("project_title") or ""
+        # Project Title (support Q: project_title variations)
+        project_title = (
+            payload_lower.get("project_title")
+            or payload_lower.get("project title")
+            or raw_row.get("project_title")
+            or raw_row.get("Q: project_title")
+            or raw_row.get("Q: Project Title")
+            or ""
         )
+        sub_row_flat["project_title"] = project_title
 
         # Track
         sub_row_flat["applicant_category"] = raw_lower.get("track", "")
