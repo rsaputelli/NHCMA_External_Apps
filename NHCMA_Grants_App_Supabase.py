@@ -1020,66 +1020,51 @@ def admin_panel():
         raw_lower = {k.lower(): v for k, v in raw_row.items()}
         payload_lower = {k.lower(): v for k, v in payload.items()}
 
+        # ---- Normalize Q: fields so letters can use clean keys ----
+        for k, v in payload.items():
+            if k.startswith("Q:"):
+                clean = k.replace("Q:", "").strip().lower()
+                payload_lower[clean] = v
+
         # Build merged row
         sub_row_flat = {**raw_lower, **payload_lower}
 
         # Applicant Name
         sub_row_flat["applicant_name"] = (
-            payload.get("Q: applicant_name")
-            or payload.get("Q: applicant_name ".lower())   # sometimes trailing space
-            or raw_row.get("applicant_name")
+            payload_lower.get("applicant_name")
+            or raw_lower.get("applicant_name")
             or ""
         )
 
-        # Email
-        sub_row_flat["email"] = (
-            payload.get("Q: email")
-            or raw_row.get("email")
-            or ""
-        )
-
-        # Phone
-        sub_row_flat["phone"] = (
-            payload.get("Q: phone")
-            or raw_row.get("phone")
-            or ""
-        )
-
-        # Project Title (the actual key)
+        # Project Title
         sub_row_flat["project_title"] = (
-            payload.get("Q: project_title")
-            or payload.get("Q: project_title ".lower())
+            payload_lower.get("project_title")
+            or raw_lower.get("project_title")
             or ""
         )
 
-        # Category → track
+        # Applicant Category = track (schema)
         sub_row_flat["applicant_category"] = (
-            raw_row.get("track")
+            raw_lower.get("track")
+            or payload_lower.get("applicant_category")
             or ""
         )
 
-        # Program (if ever used)
+        # Program
         sub_row_flat["program"] = (
-            payload.get("Q: program")
-            or raw_row.get("program")
+            payload_lower.get("program")
             or ""
         )
 
-        # School (student applications)
-        sub_row_flat["school"] = (
-            payload.get("Q: school")
-            or ""
-        )
-
-        # Org Name (organization applications)
+        # Org name
         sub_row_flat["org_name"] = (
-            payload.get("Q: org_name")
+            payload_lower.get("org_name")
             or ""
         )
 
-        # Budget Total
-        sub_row_flat["budget_total"] = (
-            payload.get("Q: budget_total")
+        # School
+        sub_row_flat["school"] = (
+            payload_lower.get("school")
             or ""
         )
 
