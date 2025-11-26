@@ -1034,7 +1034,7 @@ def admin_panel():
             or ""
         )
 
-        # Program field (your schema included this)
+        # Program field
         sub_row_flat["program"] = (
             payload.get("program")
             or raw_row.get("program")
@@ -1054,7 +1054,11 @@ def admin_panel():
             or raw_row.get("school")
             or ""
         )
+
         # ---- End Canonical wiring ----
+
+        pres = get_president_settings(sb_admin)
+        current = decisions.get(selected_id)
 
         # -----------------------------
         # Decision controls
