@@ -124,31 +124,29 @@ def get_decision(sb_read, submission_id: str) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
 
-def set_decision(sb_client, submission_id: str, decision: str, amount: Optional[float]):
-    """Insert/update decision row."""
+def set_decision(sb_client, submission_id: str, track: str, decision: str, amount: Optional[float], pres_email: str):
+    """Insert/update decision row using correct DB schema."""
 
-    decision = (decision or "").lower().strip()
-    if decision not in ("funded", "declined"):
-        raise ValueError(f"Invalid decision: {decision}")
+    # Normalize and convert decision -> boolean
+    decision_norm = (decision or "").lower().strip()
+    if decision_norm not in ("funded", "declined"):
+        raise ValueError(f"Invalid decision: {decision_norm}")
+
+    funded_bool = True if decision_norm == "funded" else False
 
     payload = {
         "submission_id": submission_id,
-        "decision": decision,
-        "amount_awarded": amount,
-        "updated_at": datetime.now(timezone.utc).isoformat()
+        "track": track,
+        "funded": funded_bool,
+        "amount_funded": amount,
+        "decision_made_at": datetime.now(timezone.utc).isoformat(),
+        "decision_made_by": pres_email,
     }
 
-    # ---- DEBUG WRAPPER TO SURFACE THE TRUE SUPABASE ERROR ----
-    try:
-        sb_client.table("grant_decisions").upsert(
-            payload,
-            on_conflict="submission_id"
-        ).execute()
-    except Exception as e:
-        st.error("Supabase error while saving decision:")
-        st.json({"error": str(e)})
-        raise
-
+    sb_client.table("grant_decisions").upsert(
+        payload,
+        on_conflict="submission_id"
+    ).execute()
 
 def get_all_decisions(sb_read) -> Dict[str, Dict[str, Any]]:
     """Return mapping submission_id → decision row."""
@@ -1109,9 +1107,12 @@ def admin_panel():
         set_decision(
             sb_admin,
             selected_id,
+            sub_row_flat.get("track"),     # from submission row
             decision_choice,
             amount_val if decision_choice == "funded" else None,
+            pres.get("email"),             # decision maker
         )
+
         st.success("Decision saved.")
         st.experimental_rerun()
 
