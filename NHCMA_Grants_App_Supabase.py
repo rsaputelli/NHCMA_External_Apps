@@ -1114,7 +1114,7 @@ def admin_panel():
         )
 
         st.success("Decision saved.")
-        st.experimental_rerun()
+        st.rerun()
 
         st.markdown("---")
         st.markdown("#### Generate & Send Notification")
