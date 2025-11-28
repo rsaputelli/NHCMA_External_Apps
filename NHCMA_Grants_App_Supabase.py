@@ -1114,30 +1114,62 @@ def admin_panel():
         st.markdown("Preview below:")
         st.markdown(html, unsafe_allow_html=True)
 
-        # -----------------------------
-        # Send Email
-        # -----------------------------
-        if st.button("Send Email Notification"):
-            try:
-                msg = EmailMessage()
-                msg["Subject"] = "NHCMA Foundation — Grant Decision"
-                msg["From"] = pres["email"]
-                msg["To"] = sub_row_flat.get("email")
-                msg.set_content("Your email client does not support HTML.")
-                msg.add_alternative(html, subtype="html")
+        # -----------------------------------------------------
+        # Email Sending Block (SAFE — uses existing send_email)
+        # -----------------------------------------------------
 
-                smtp = smtplib.SMTP(
-                    os.environ.get("SMTP_HOST"),
-                    int(os.environ.get("SMTP_PORT")),
+        st.markdown("### Send Email Notification")
+
+        recipient = sub_row_flat.get("email", "").strip()
+        if not recipient:
+            st.warning("No applicant email found in record — cannot send.", icon="⚠️")
+        else:
+            # Dynamic subject
+            subject = (
+                "NHCMA Foundation — Grant Award Notification"
+                if decision_choice == "funded"
+                else "NHCMA Foundation — Grant Decision"
+            )
+
+            # Send button
+            if st.button("Send Email Now", key="send_email_now"):
+                ok = send_email(
+                    to_email=recipient,
+                    cc_email=pres.get("email"),     # CC president automatically
+                    subject=subject,
+                    html_body=html
                 )
-                smtp.starttls()
-                smtp.login(os.environ.get("SMTP_USER"), os.environ.get("SMTP_PASS"))
-                smtp.send_message(msg)
-                smtp.quit()
 
-                st.success("Email sent successfully!")
-            except Exception as e:
-                st.error(f"Error sending email: {e}")
+                if ok:
+                    st.success(f"Email sent to {recipient}.", icon="📨")
+                    st.session_state[f"last_sent_{selected_id}"] = {
+                        "to": recipient,
+                        "subject": subject,
+                        "html": html
+                    }
+                else:
+                    st.error("Email failed to send. Check SMTP settings.", icon="❌")
+
+            # Re-send option if previously sent
+            prev_key = f"last_sent_{selected_id}"
+            if prev_key in st.session_state:
+                prev = st.session_state[prev_key]
+                if st.button("Re-Send Email", key="resend_email"):
+                    ok = send_email(
+                        to_email=prev["to"],
+                        cc_email=pres.get("email"),
+                        subject=prev["subject"],
+                        html_body=prev["html"],
+                    )
+                    if ok:
+                        st.success("Email re-sent.", icon="📨")
+                    else:
+                        st.error("Re-send failed.", icon="❌")
+
+        # -----------------------------------------------------
+        # END Email Block
+        # -----------------------------------------------------
+
 
         # -----------------------------
         # Download PDF
