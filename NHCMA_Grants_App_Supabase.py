@@ -127,22 +127,28 @@ def get_decision(sb_read, submission_id: str) -> Optional[Dict[str, Any]]:
 def set_decision(sb_client, submission_id: str, decision: str, amount: Optional[float]):
     """Insert/update decision row."""
 
-    # Normalize input
     decision = (decision or "").lower().strip()
     if decision not in ("funded", "declined"):
         raise ValueError(f"Invalid decision: {decision}")
 
     payload = {
         "submission_id": submission_id,
-        "decision": decision,        # normalized: "funded" or "declined"
-        "amount_awarded": amount,    # None if declined
+        "decision": decision,
+        "amount_awarded": amount,
         "updated_at": datetime.now(timezone.utc).isoformat()
     }
 
-    sb_client.table("grant_decisions").upsert(
-        payload,
-        on_conflict="submission_id"
-    ).execute()
+    # ---- DEBUG WRAPPER TO SURFACE THE TRUE SUPABASE ERROR ----
+    try:
+        sb_client.table("grant_decisions").upsert(
+            payload,
+            on_conflict="submission_id"
+        ).execute()
+    except Exception as e:
+        st.error("Supabase error while saving decision:")
+        st.json({"error": str(e)})
+        raise
+
 
 def get_all_decisions(sb_read) -> Dict[str, Dict[str, Any]]:
     """Return mapping submission_id → decision row."""
