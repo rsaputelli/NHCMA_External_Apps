@@ -492,7 +492,7 @@ def build_confirmation_email(track: str, payload: Dict[str, Any], record_id: Opt
 def build_award_letter_html(sub: Dict[str, Any], pres: Dict[str, str], amount: float) -> str:
     """Builds HTML for a funded grant decision using normalized keys."""
 
-    applicant = sub.get("applicant_name") or "Applicant"
+    applicant = sub.get("first_name") or sub.get("applicant_name") or "Applicant"
     project = sub.get("project_title") or "your project"
     category = sub.get("applicant_category") or ""
     program = sub.get("program") or ""
@@ -539,7 +539,7 @@ def build_award_letter_html(sub: Dict[str, Any], pres: Dict[str, str], amount: f
 def build_decline_letter_html(sub: Dict[str, Any], pres: Dict[str, str]) -> str:
     """Builds HTML for a declined grant decision using normalized keys."""
 
-    applicant = sub.get("applicant_name") or "Applicant"
+    applicant = sub.get("first_name") or sub.get("applicant_name") or "Applicant"
     project = sub.get("project_title") or "your project"
     category = sub.get("applicant_category") or ""
 
@@ -1033,6 +1033,13 @@ def admin_panel():
         sub_row_flat["applicant_name"] = (
             payload_lower.get("applicant_name") or raw_lower.get("applicant_name") or ""
         )
+
+        # --------------------------------------
+        # Extract First Name (SAFE INSERT POINT)
+        # --------------------------------------
+        full_name = sub_row_flat["applicant_name"].strip()
+        first_name = full_name.split()[0] if full_name else ""
+        sub_row_flat["first_name"] = first_name
 
         # Project Title (support Q: project_title variations)
         project_title = (
