@@ -1103,8 +1103,8 @@ def admin_panel():
             decision_choice,
             amount_val if decision_choice == "funded" else None,
         )
-            st.success("Decision saved.")
-            st.experimental_rerun()
+        st.success("Decision saved.")
+        st.experimental_rerun()
 
         st.markdown("---")
         st.markdown("#### Generate & Send Notification")
