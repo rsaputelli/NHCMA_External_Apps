@@ -1097,13 +1097,12 @@ def admin_panel():
                 step=100.0,
             )
 
-        if st.button("Save Decision"):
-            set_decision(
-                sb_write,
-                selected_id,
-                decision_choice,
-                amount_val if decision_choice == "funded" else None,
-            )
+        set_decision(
+            sb_admin,
+            selected_id,
+            decision_choice,
+            amount_val if decision_choice == "funded" else None,
+        )
             st.success("Decision saved.")
             st.experimental_rerun()
 
