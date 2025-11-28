@@ -1120,7 +1120,9 @@ def admin_panel():
 
         st.markdown("### Send Email Notification")
 
-        recipient = sub_row_flat.get("email", "").strip()
+        # TEMP OVERRIDE FOR TESTING — redirects all emails to Ray
+        recipient = "ray@lutinemanagement.com"
+        # recipient = sub_row_flat.get("email", "").strip()
         if not recipient:
             st.warning("No applicant email found in record — cannot send.", icon="⚠️")
         else:
