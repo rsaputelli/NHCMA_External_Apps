@@ -124,10 +124,10 @@ def get_decision(sb_read, submission_id: str) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
 
-def set_decision(sb_write, submission_id: str, decision: str, amount: Optional[float]):
+def set_decision(sb_client, submission_id: str, decision: str, amount: Optional[float]):
     """Insert/update decision row."""
 
-    # Normalize input (recommended but optional)
+    # Normalize input
     decision = (decision or "").lower().strip()
     if decision not in ("funded", "declined"):
         raise ValueError(f"Invalid decision: {decision}")
@@ -139,7 +139,10 @@ def set_decision(sb_write, submission_id: str, decision: str, amount: Optional[f
         "updated_at": datetime.now(timezone.utc).isoformat()
     }
 
-    sb_write.table("grant_decisions").upsert(payload, on_conflict="submission_id").execute()
+    sb_client.table("grant_decisions").upsert(
+        payload,
+        on_conflict="submission_id"
+    ).execute()
 
 def get_all_decisions(sb_read) -> Dict[str, Dict[str, Any]]:
     """Return mapping submission_id → decision row."""
