@@ -1088,36 +1088,43 @@ def admin_panel():
         # -----------------------------
         # Decision controls
         # -----------------------------
+        # current now comes from grant_decisions, which uses:
+        #   funded (bool), amount_funded (numeric)
         decision_choice = st.radio(
             "Decision",
             ["funded", "declined"],
-            index=0 if current and current["decision"] == "funded" else 1,
+            index=0 if current and current.get("funded") else 1,
         )
 
         amount_val = None
         if decision_choice == "funded":
+            default_amount = (
+                float(current.get("amount_funded"))
+                if current and current.get("amount_funded") is not None
+                else 2500.0
+            )
             amount_val = st.number_input(
                 "Award Amount",
                 min_value=0.0,
-                value=float(current["amount_awarded"])
-                    if current and current["amount_awarded"] else 2500.0,
+                value=default_amount,
                 step=100.0,
             )
 
-        set_decision(
-            sb_admin,
-            selected_id,
-            sub_row_flat.get("track"),     # from submission row
-            decision_choice,
-            amount_val if decision_choice == "funded" else None,
-            pres.get("email"),             # decision maker
-        )
-
-        st.success("Decision saved.")
-        st.rerun()
+        # Only save when the button is clicked
+        if st.button("Save Decision"):
+            set_decision(
+                sb_admin,
+                selected_id,
+                sub_row_flat.get("track"),  # from submission row
+                decision_choice,
+                amount_val if decision_choice == "funded" else None,
+                pres.get("email"),          # decision maker
+            )
+            st.success("Decision saved.")
 
         st.markdown("---")
         st.markdown("#### Generate & Send Notification")
+
 
         # -----------------------------
         # Build letter using flattened row
