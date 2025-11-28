@@ -1194,7 +1194,84 @@ def admin_panel():
         # -----------------------------------------------------
         # END Email Block
         # -----------------------------------------------------
+        
+        # ===========================================================
+        # BATCH PROCESSING — Save All Decisions & Send All Emails
+        # ===========================================================
+        st.markdown("---")
+        st.subheader("📤 Batch Processing: Save All Decisions & Send All Emails")
 
+        st.info(
+            "This will save all decisions currently selected in the table "
+            "and send the corresponding email (award or decline) to each applicant.\n\n"
+            "**Test mode**: If recipient override is enabled, all emails go to Ray only."
+        )
+
+        if st.button("Save ALL Decisions and Send ALL Emails", type="primary"):
+            results = []
+
+            for _, row in df.iterrows():
+                sub_id = row["id"]
+                track = row.get("track", "")
+                applicant_email = row.get("email", "")
+                applicant_name = row.get("applicant_name", "")
+
+                # Look up decision from decisions_df
+                dec = decisions_df.get(sub_id)
+                if not dec:
+                    results.append((sub_id, "❌ No decision on file — skipped"))
+                    continue
+
+                decision = dec.get("decision")
+                amount = dec.get("amount_awarded")
+
+                # Save the decision (will upsert)
+                try:
+                    set_decision(
+                        sb_admin,
+                        sub_id,
+                        track,
+                        decision,
+                        amount,
+                        pres.get("email"),
+                    )
+                except Exception as e:
+                    results.append((sub_id, f"❌ Error saving decision: {e}"))
+                    continue
+
+                # Build email body
+                try:
+                    if decision == "funded":
+                        html = build_award_letter_html(
+                            row,
+                            pres,
+                            float(amount or 0),
+                        )
+                        subject = f"NHCMA Foundation Grant Award — {applicant_name}"
+                    else:
+                        html = build_decline_letter_html(row, pres)
+                        subject = f"NHCMA Foundation Grant Decision — {applicant_name}"
+
+                except Exception as e:
+                    results.append((sub_id, f"❌ Error building email HTML: {e}"))
+                    continue
+
+                # Email sending
+                try:
+                    payload = {
+                        "to": applicant_email,
+                        "subject": subject,
+                        "html": html,
+                    }
+                    call_res = sb.functions.invoke("send-email", body=payload)
+                    results.append((sub_id, "✅ Email sent"))
+                except Exception as e:
+                    results.append((sub_id, f"❌ Email error: {e}"))
+
+            st.success("Batch processing complete.")
+            st.write("### Results")
+            for rid, status in results:
+                st.write(f"• **{rid}** — {status}")
 
         # -----------------------------
         # Download PDF
