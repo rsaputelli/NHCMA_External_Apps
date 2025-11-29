@@ -1365,7 +1365,13 @@ def admin_panel():
                         or raw_lower.get("q: project title")
                         or ""
                     )
-
+                    # applicant category (track)
+                    sub_flat["applicant_category"] = (
+                        payload_lower.get("applicant_category")
+                        or raw_lower.get("track")
+                        or raw_lower.get("applicant_category")
+                        or ""
+                    )
                     # org/school
                     sub_flat["org_name"] = payload_lower.get("org_name") or ""
                     sub_flat["school"] = payload_lower.get("school") or ""
