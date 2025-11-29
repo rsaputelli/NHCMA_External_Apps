@@ -1354,7 +1354,8 @@ def admin_panel():
         BUCKET_NAME,
     )
 
-    sb = get_supabase(
+    # Use a distinct name so we don't shadow the global `sb` client
+    sb_booklets = get_supabase(
         st.secrets["SUPABASE_URL"],
         st.secrets["SUPABASE_SERVICE_ROLE_KEY"]
     )
@@ -1376,7 +1377,7 @@ def admin_panel():
     if run_all:
 
         with st.spinner("Building DOCX booklets and uploading to Storage..."):
-            report = build_all_booklets(sb, where=where, start_version=1)
+            report = build_all_booklets(sb_booklets, where=where, start_version=1)
 
         st.success("Done.")
         st.dataframe(report)
