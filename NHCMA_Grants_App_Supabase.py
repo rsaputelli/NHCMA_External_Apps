@@ -1282,7 +1282,7 @@ def admin_panel():
                 sub_id = row["id"]
 
                 # Determine decision + amount for this row
-                decision = decisions_df.get(sub_id, "")
+                decision = decisions.get(sub_id, "")
                 amount = awards_df.get(sub_id, 0)
 
                 # Skip if no decision selected
