@@ -1271,30 +1271,29 @@ def admin_panel():
         st.info(
             "This will save all decisions currently selected in the table "
             "and send the corresponding email (award or decline) to each applicant.\n\n"
-            "**Test mode**: If recipient override is enabled, all emails go to Ray only."
+            "**Test mode**: If TEST_OVERRIDE is enabled, all emails go to Ray only."
         )
 
         if st.button("Save ALL Decisions and Send ALL Emails", type="primary"):
             results = []
 
-            # Loop over all submissions in the table
+            # Loop over all submissions visible in the admin table
             for _, row in df.iterrows():
                 sub_id = str(row["id"])
                 track = row.get("track", "")
-                # primary stored email on the row
-                row_email = (row.get("email") or row.get("Email") or "").strip()
 
-                # Look up decision record from decisions dict (string-keyed)
+                # Lookup decision in dict from earlier
                 dec = decisions.get(sub_id)
                 if not dec:
                     results.append((sub_id, "⚠️ Skipped — no decision on file"))
                     continue
 
-                # funded / declined + amount
                 decision = "funded" if dec.get("funded") else "declined"
                 amount = dec.get("amount_funded")
 
-                # Persist the decision to the DB
+                # ---------------------------------------------------------
+                # Save the decision to the database (upsert)
+                # ---------------------------------------------------------
                 try:
                     set_decision(
                         sb_admin,
@@ -1309,13 +1308,69 @@ def admin_panel():
                     continue
 
                 # ---------------------------------------------------------
-                # Canonical flattening (shared with single email / preview)
+                # Load FULL submission record (admin df row is NOT complete)
                 # ---------------------------------------------------------
                 try:
-                    sub_flat = canonical_flatten(row)
-                    applicant = sub_flat["applicant"]
+                    full = (
+                        sb_admin.table("submissions")
+                        .select("*")
+                        .eq("id", sub_id)
+                        .single()
+                        .execute()
+                        .data
+                    )
+                    if not full:
+                        raise ValueError("No submission record found.")
+                except Exception as e:
+                    results.append((sub_id, f"❌ Could not load full record: {e}"))
+                    continue
 
-                    # Build HTML + subject
+                # ---------------------------------------------------------
+                # Flatten using the SAME logic as the single-email preview
+                # ---------------------------------------------------------
+                try:
+                    raw_row = full
+                    payload = raw_row.get("payload_json", {}) or {}
+
+                    # normalize keys
+                    raw_lower = {k.lower(): v for k, v in raw_row.items()}
+                    payload_lower = {k.lower(): v for k, v in payload.items()}
+
+                    # include cleaned Q: fields
+                    for k, v in payload.items():
+                        if k.startswith("Q:"):
+                            clean = k.replace("Q:", "").strip().lower()
+                            payload_lower[clean] = v
+
+                    # merged canonical structure
+                    sub_flat = {**raw_lower, **payload_lower}
+
+                    # applicant
+                    applicant = (
+                        payload_lower.get("applicant_name")
+                        or raw_lower.get("applicant_name")
+                        or ""
+                    )
+                    sub_flat["applicant"] = applicant
+
+                    # first name
+                    full_name = applicant.strip()
+                    sub_flat["first_name"] = full_name.split()[0] if full_name else ""
+
+                    # project title (VERY IMPORTANT)
+                    sub_flat["project_title"] = (
+                        payload_lower.get("project_title")
+                        or payload_lower.get("project title")
+                        or raw_lower.get("project_title")
+                        or raw_lower.get("q: project title")
+                        or ""
+                    )
+
+                    # org/school
+                    sub_flat["org_name"] = payload_lower.get("org_name") or ""
+                    sub_flat["school"] = payload_lower.get("school") or ""
+
+                    # Build correct HTML
                     if decision == "funded":
                         html = build_award_letter_html(
                             sub_flat,
@@ -1334,19 +1389,21 @@ def admin_panel():
                 # ---------------------------------------------------------
                 # Determine recipient (TEST_OVERRIDE applied here)
                 # ---------------------------------------------------------
-                real_email = (row_email or sub_flat.get("email", "")).strip()
+                real_email = (
+                    row.get("email")
+                    or row.get("Email")
+                    or sub_flat.get("email")
+                    or ""
+                ).strip()
 
-                if TEST_OVERRIDE:
-                    to_email = TEST_OVERRIDE_EMAIL
-                else:
-                    to_email = real_email
+                to_email = TEST_OVERRIDE_EMAIL if TEST_OVERRIDE else real_email
 
                 if not to_email:
                     results.append((sub_id, "❌ No recipient email found"))
                     continue
 
                 # ---------------------------------------------------------
-                # Send email using same SMTP helper as single-send
+                # Send email via same SMTP function used for single sends
                 # ---------------------------------------------------------
                 try:
                     ok = send_email(
@@ -1361,21 +1418,18 @@ def admin_panel():
                                 (sub_id, f"✅ Email sent to TEST OVERRIDE ({TEST_OVERRIDE_EMAIL})")
                             )
                         else:
-                            results.append(
-                                (sub_id, f"✅ Email sent to {real_email}")
-                            )
+                            results.append((sub_id, f"✅ Email sent to {real_email}"))
                     else:
                         results.append((sub_id, "❌ SMTP send failed"))
                 except Exception as e:
                     results.append((sub_id, f"❌ Email error: {e}"))
 
-            # ---------------------------------------------------------
-            # Results display
-            # ---------------------------------------------------------
+            # Display results
             st.success("Batch processing complete.")
             st.write("### Results")
             for rid, status in results:
                 st.write(f"• **{rid}** — {status}")
+
 
 
         # -----------------------------
