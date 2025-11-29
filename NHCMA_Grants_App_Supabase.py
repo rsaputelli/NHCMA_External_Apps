@@ -116,7 +116,7 @@ EDGE_BASE   = f"https://{PROJECT_REF}.supabase.co/functions/v1"
 # ============================
 # Currently managed in code; will be exposed in Admin UI later.
 
-TEST_OVERRIDE = True
+TEST_OVERRIDE = False
 TEST_OVERRIDE_EMAIL = "ray@lutinemanagement.com"
 
 # ========= Grant Decision Helpers =========
