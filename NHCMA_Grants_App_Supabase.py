@@ -149,12 +149,14 @@ def set_decision(sb_client, submission_id: str, track: str, decision: str, amoun
     ).execute()
 
 def get_all_decisions(sb_read) -> Dict[str, Dict[str, Any]]:
-    """Return mapping submission_id → decision row."""
+    """Return mapping submission_id → decision row (keys as strings)."""
     try:
         rows = sb_read.table("grant_decisions").select("*").execute().data or []
-        return {r["submission_id"]: r for r in rows}
+        # Normalize keys to str so we can safely use selected_id (which is a str)
+        return {str(r["submission_id"]): r for r in rows}
     except Exception:
         return {}
+
 # ========= /Grant Decision Helpers =========
 
 def edge_signed_download_url(bucket: str, path: str) -> str:
@@ -973,12 +975,17 @@ def admin_panel():
     decisions = get_all_decisions(sb_admin)
 
     # Merge decisions into df for convenience
-    df["decision"] = df["id"].astype(str).map(
-        lambda sid: decisions.get(sid, {}).get("decision")
-    )
+    def _decision_label(sid: str):
+        dec = decisions.get(sid)
+        if not dec:
+            return None
+        return "funded" if dec.get("funded") else "declined"
+
+    df["decision"] = df["id"].astype(str).map(_decision_label)
     df["amount_awarded"] = df["id"].astype(str).map(
-        lambda sid: decisions.get(sid, {}).get("amount_awarded")
+        lambda sid: decisions.get(sid, {}).get("amount_funded")
     )
+
 
     st.dataframe(
         df,
@@ -1211,19 +1218,20 @@ def admin_panel():
             results = []
 
             for _, row in df.iterrows():
-                sub_id = row["id"]
+                sub_id = str(row["id"])
                 track = row.get("track", "")
                 applicant_email = row.get("email", "")
                 applicant_name = row.get("applicant_name", "")
 
-                # Look up decision from decisions_df
-                dec = decisions_df.get(sub_id)
+                # Look up decision from decisions (string-keyed)
+                dec = decisions.get(sub_id)
                 if not dec:
                     results.append((sub_id, "❌ No decision on file — skipped"))
                     continue
 
-                decision = dec.get("decision")
-                amount = dec.get("amount_awarded")
+                # Translate DB shape → string + amount
+                decision = "funded" if dec.get("funded") else "declined"
+                amount = dec.get("amount_funded")
 
                 # Save the decision (will upsert)
                 try:
@@ -1256,7 +1264,7 @@ def admin_panel():
                     results.append((sub_id, f"❌ Error building email HTML: {e}"))
                     continue
 
-                # Email sending
+                # Email sending via Edge function
                 try:
                     payload = {
                         "to": applicant_email,
@@ -1272,6 +1280,7 @@ def admin_panel():
             st.write("### Results")
             for rid, status in results:
                 st.write(f"• **{rid}** — {status}")
+
 
         # -----------------------------
         # Download PDF
