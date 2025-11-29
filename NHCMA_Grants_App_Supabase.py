@@ -1320,7 +1320,7 @@ def admin_panel():
                         "subject": subject,
                         "html": html,
                     }
-                    call_res = sb_admin.functions.invoke("send-email", body=payload)
+                    call_res = sb.functions.invoke("send-email", body=payload)
                     results.append((sub_id, "✅ Email sent"))
                 except Exception as e:
                     results.append((sub_id, f"❌ Email error: {e}"))
