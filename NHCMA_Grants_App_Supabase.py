@@ -1283,7 +1283,7 @@ def admin_panel():
 
                 # Determine decision + amount for this row
                 decision = decisions.get(sub_id, "")
-                amount = awards_df.get(sub_id, 0)
+                amount = dec.get("amount_funded", 0)
 
                 # Skip if no decision selected
                 if decision not in ("funded", "declined"):
