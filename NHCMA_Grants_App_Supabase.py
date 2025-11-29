@@ -1313,15 +1313,18 @@ def admin_panel():
                     results.append((sub_id, f"❌ Error building email HTML: {e}"))
                     continue
 
-                # Email sending via Edge function
+                # Email sending via SAME SMTP FUNCTION as single-send
                 try:
-                    payload = {
-                        "to": applicant_email,
-                        "subject": subject,
-                        "html": html,
-                    }
-                    call_res = sb.functions.invoke("send-email", body=payload)
-                    results.append((sub_id, "✅ Email sent"))
+                    ok = send_email(
+                        to_email=applicant_email,
+                        cc_email=pres.get("email"),
+                        subject=subject,
+                        html_body=html,
+                    )
+                    if ok:
+                        results.append((sub_id, "✅ Email sent"))
+                    else:
+                        results.append((sub_id, "❌ SMTP send failed"))
                 except Exception as e:
                     results.append((sub_id, f"❌ Email error: {e}"))
 
@@ -1329,7 +1332,6 @@ def admin_panel():
             st.write("### Results")
             for rid, status in results:
                 st.write(f"• **{rid}** — {status}")
-
 
         # -----------------------------
         # Download PDF
