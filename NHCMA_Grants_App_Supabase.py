@@ -1221,7 +1221,7 @@ def admin_panel():
                 sub_id = str(row["id"])
                 track = row.get("track", "")
                 applicant_email = row.get("email", "")
-                applicant_name = row.get("applicant_name", "")
+                # applicant_name = row.get("applicant_name", "") # applicant_name resolved later from payload/raw_lower
 
                 # Look up decision from decisions (string-keyed)
                 dec = decisions.get(sub_id)
@@ -1247,18 +1247,67 @@ def admin_panel():
                     results.append((sub_id, f"❌ Error saving decision: {e}"))
                     continue
 
-                # Build email body
+                # Build email body (using canonical normalized submission object)
                 try:
+                    # --- reconstruct raw + payload ---
+                    raw = row.to_dict()
+                    payload = raw.get("payload_json", {}) or {}
+
+                    # normalize raw + payload
+                    raw_lower = {k.lower(): v for k, v in raw.items()}
+                    payload_lower = {k.lower(): v for k, v in payload.items()}
+                    for k, v in payload.items():
+                        if k.startswith("Q:"):
+                            clean = k.replace("Q:", "").strip().lower()
+                            payload_lower[clean] = v
+
+                    # merge into canonical flat object
+                    sub_flat = {**raw_lower, **payload_lower}
+
+                    # applicant_name → ensure pulled from payload if present
+                    applicant = (
+                        payload_lower.get("applicant_name")
+                        or raw_lower.get("applicant_name")
+                        or ""
+                    )
+
+                    # extract firstname
+                    full_name = applicant.strip()
+                    first_name = full_name.split()[0] if full_name else ""
+                    sub_flat["first_name"] = first_name
+
+                    # normalize project_title
+                    project_title = (
+                        payload_lower.get("project_title")
+                        or payload_lower.get("project title")
+                        or raw_lower.get("project_title")
+                        or raw_lower.get("Q: project_title")
+                        or raw_lower.get("Q: Project Title")
+                        or ""
+                    )
+                    sub_flat["project_title"] = project_title
+
+                    # track → applicant_category
+                    sub_flat["applicant_category"] = raw_lower.get("track", "")
+
+                    # program
+                    sub_flat["program"] = payload_lower.get("program") or ""
+
+                    # org/school
+                    sub_flat["org_name"] = payload_lower.get("org_name") or ""
+                    sub_flat["school"] = payload_lower.get("school") or ""
+
+                    # ---- Build HTML using canonical object ----
                     if decision == "funded":
                         html = build_award_letter_html(
-                            row,
+                            sub_flat,
                             pres,
                             float(amount or 0),
                         )
-                        subject = f"NHCMA Foundation Grant Award — {applicant_name}"
+                        subject = f"NHCMA Foundation Grant Award — {applicant}"
                     else:
-                        html = build_decline_letter_html(row, pres)
-                        subject = f"NHCMA Foundation Grant Decision — {applicant_name}"
+                        html = build_decline_letter_html(sub_flat, pres)
+                        subject = f"NHCMA Foundation Grant Decision — {applicant}"
 
                 except Exception as e:
                     results.append((sub_id, f"❌ Error building email HTML: {e}"))
