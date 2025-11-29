@@ -111,6 +111,14 @@ SHA12 = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()[:12]
 PROJECT_REF = "icjunpjliexaacexjgwy"
 EDGE_BASE   = f"https://{PROJECT_REF}.supabase.co/functions/v1"
 
+# ============================
+# Email Override Toggle (Admin)
+# ============================
+# Currently managed in code; will be exposed in Admin UI later.
+
+TEST_OVERRIDE = True
+TEST_OVERRIDE_EMAIL = "ray@lutinemanagement.com"
+
 # ========= Grant Decision Helpers =========
 # decision: "funded" or "declined"
 # amount: numeric (nullable if declined)
@@ -854,6 +862,58 @@ def _admin_allowed() -> bool:
             return False
     return False
 
+# ===========================================================
+# Canonical submission flattener (used by single + batch email)
+# ===========================================================
+def canonical_flatten(row):
+    """Normalize a submission row (raw + payload) into a canonical flat dict."""
+
+    raw = row.to_dict()
+    payload = raw.get("payload_json", {}) or {}
+
+    # lowercased maps
+    raw_lower = {k.lower(): v for k, v in raw.items()}
+    payload_lower = {k.lower(): v for k, v in payload.items()}
+
+    # clean Q: fields → lowercase keys (e.g., "Q: Project Title" → "project title")
+    for k, v in payload.items():
+        if k.startswith("Q:"):
+            clean = k.replace("Q:", "").strip().lower()
+            payload_lower[clean] = v
+
+    # merged
+    sub_flat = {**raw_lower, **payload_lower}
+
+    # applicant name
+    applicant = (
+        payload_lower.get("applicant_name")
+        or raw_lower.get("applicant_name")
+        or ""
+    )
+    sub_flat["applicant"] = applicant
+
+    # first name
+    full_name = applicant.strip()
+    sub_flat["first_name"] = full_name.split()[0] if full_name else ""
+
+    # project title (fully normalized)
+    sub_flat["project_title"] = (
+        payload_lower.get("project_title")
+        or payload_lower.get("project title")
+        or raw_lower.get("project_title")
+        or raw_lower.get("q: project title")
+        or ""
+    )
+
+    # track/category
+    sub_flat["applicant_category"] = raw_lower.get("track", "")
+
+    # org / school
+    sub_flat["org_name"] = payload_lower.get("org_name") or ""
+    sub_flat["school"] = payload_lower.get("school") or ""
+
+    return sub_flat
+
 # ----------------------------
 # Admin
 # ----------------------------
@@ -1217,87 +1277,27 @@ def admin_panel():
         if st.button("Save ALL Decisions and Send ALL Emails", type="primary"):
             results = []
 
+            # Loop over ALL rows in df (each row = a submission)
             for _, row in df.iterrows():
-                sub_id = str(row["id"])
-                track = row.get("track", "")
-                applicant_email = row.get("email", "")
-                # applicant_name = row.get("applicant_name", "") # applicant_name resolved later from payload/raw_lower
+                sub_id = row["id"]
 
-                # Look up decision from decisions (string-keyed)
-                dec = decisions.get(sub_id)
-                if not dec:
-                    results.append((sub_id, "❌ No decision on file — skipped"))
+                # Determine decision + amount for this row
+                decision = decisions_df.get(sub_id, "")
+                amount = awards_df.get(sub_id, 0)
+
+                # Skip if no decision selected
+                if decision not in ("funded", "declined"):
+                    results.append((sub_id, "⚠️ Skipped — No decision selected"))
                     continue
 
-                # Translate DB shape → string + amount
-                decision = "funded" if dec.get("funded") else "declined"
-                amount = dec.get("amount_funded")
-
-                # Save the decision (will upsert)
+                # ======================================================
+                # Canonical flatten (shared with single-send)
+                # ======================================================
                 try:
-                    set_decision(
-                        sb_admin,
-                        sub_id,
-                        track,
-                        decision,
-                        amount,
-                        pres.get("email"),
-                    )
-                except Exception as e:
-                    results.append((sub_id, f"❌ Error saving decision: {e}"))
-                    continue
+                    sub_flat = canonical_flatten(row)
+                    applicant = sub_flat["applicant"]
 
-                # Build email body (using canonical normalized submission object)
-                try:
-                    # --- reconstruct raw + payload ---
-                    raw = row.to_dict()
-                    payload = raw.get("payload_json", {}) or {}
-
-                    # normalize raw + payload
-                    raw_lower = {k.lower(): v for k, v in raw.items()}
-                    payload_lower = {k.lower(): v for k, v in payload.items()}
-                    for k, v in payload.items():
-                        if k.startswith("Q:"):
-                            clean = k.replace("Q:", "").strip().lower()
-                            payload_lower[clean] = v
-
-                    # merge into canonical flat object
-                    sub_flat = {**raw_lower, **payload_lower}
-
-                    # applicant_name → ensure pulled from payload if present
-                    applicant = (
-                        payload_lower.get("applicant_name")
-                        or raw_lower.get("applicant_name")
-                        or ""
-                    )
-
-                    # extract firstname
-                    full_name = applicant.strip()
-                    first_name = full_name.split()[0] if full_name else ""
-                    sub_flat["first_name"] = first_name
-
-                    # normalize project_title
-                    project_title = (
-                        payload_lower.get("project_title")
-                        or payload_lower.get("project title")
-                        or raw_lower.get("project_title")
-                        or raw_lower.get("Q: project_title")
-                        or raw_lower.get("Q: Project Title")
-                        or ""
-                    )
-                    sub_flat["project_title"] = project_title
-
-                    # track → applicant_category
-                    sub_flat["applicant_category"] = raw_lower.get("track", "")
-
-                    # program
-                    sub_flat["program"] = payload_lower.get("program") or ""
-
-                    # org/school
-                    sub_flat["org_name"] = payload_lower.get("org_name") or ""
-                    sub_flat["school"] = payload_lower.get("school") or ""
-
-                    # ---- Build HTML using canonical object ----
+                    # Build HTML
                     if decision == "funded":
                         html = build_award_letter_html(
                             sub_flat,
@@ -1313,21 +1313,47 @@ def admin_panel():
                     results.append((sub_id, f"❌ Error building email HTML: {e}"))
                     continue
 
-                # Email sending via SAME SMTP FUNCTION as single-send
+                # ======================================================
+                # Determine recipient (TEST OVERRIDE applied here)
+                # ======================================================
+                real_email = (
+                    row.get("email")
+                    or row.get("Email")
+                    or sub_flat.get("email")
+                    or ""
+                ).strip()
+
+                if TEST_OVERRIDE:
+                    to_email = TEST_OVERRIDE_EMAIL
+                else:
+                    to_email = real_email
+
+                if not to_email:
+                    results.append((sub_id, "❌ No recipient email found"))
+                    continue
+
+                # ======================================================
+                # Send email using the same SMTP function as single-send
+                # ======================================================
                 try:
                     ok = send_email(
-                        to_email=applicant_email,
+                        to_email=to_email,
                         cc_email=pres.get("email"),
                         subject=subject,
                         html_body=html,
                     )
                     if ok:
-                        results.append((sub_id, "✅ Email sent"))
+                        if TEST_OVERRIDE:
+                            results.append((sub_id, f"✅ Email sent to TEST OVERRIDE ({TEST_OVERRIDE_EMAIL})"))
+                        else:
+                            results.append((sub_id, f"✅ Email sent to {real_email}"))
                     else:
                         results.append((sub_id, "❌ SMTP send failed"))
+
                 except Exception as e:
                     results.append((sub_id, f"❌ Email error: {e}"))
 
+            # Display batch results
             st.success("Batch processing complete.")
             st.write("### Results")
             for rid, status in results:
