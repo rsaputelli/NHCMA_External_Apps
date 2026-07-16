@@ -415,6 +415,7 @@ def insert_submission(track: str, applicant_name: str, email: str, phone: str, p
         "applicant_name": (applicant_name or "").strip(),
         "email": (email or "").strip(),
         "phone": (phone or "").strip(),
+        "application_year": 2026,
         "payload_json": payload,
         "uploads_json": uploads,
     }
@@ -646,6 +647,19 @@ def _missing_org_fields(org_name, applicant_name, email, project_title):
         missing.append("Project Title")
     return missing
 
+
+def _missing_payment_address_fields(payment_address_1, payment_city, payment_state, payment_zip):
+    missing = []
+    for label, value in [
+        ("Payment Address Line 1", payment_address_1),
+        ("Payment City", payment_city),
+        ("Payment State", payment_state),
+        ("Payment ZIP", payment_zip),
+    ]:
+        if not (value or "").strip():
+            missing.append(label)
+    return missing
+
 # ----------------------------
 # Forms with unique keys
 # ----------------------------
@@ -668,6 +682,14 @@ def org_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]:
     exec_dir = st.text_input("Executive Director (First/Last)", key="org_exec_dir", disabled=disabled)
     exec_email = st.text_input("Executive Director Email", key="org_exec_email", disabled=disabled)
     exec_phone = st.text_input("Executive Director Phone", key="org_exec_phone", disabled=disabled)
+
+    st.markdown("**Mailing Address for Grant Award Payment**")
+    st.caption("If this application is funded, the grant award check will be mailed to this address.")
+    payment_address_1 = st.text_input("Address Line 1*", key="org_payment_address_1", disabled=disabled)
+    payment_address_2 = st.text_input("Address Line 2", key="org_payment_address_2", disabled=disabled)
+    payment_city = st.text_input("City*", key="org_payment_city", disabled=disabled)
+    payment_state = st.text_input("State*", key="org_payment_state", disabled=disabled)
+    payment_zip = st.text_input("ZIP Code*", key="org_payment_zip", disabled=disabled)
 
     mission = st.text_area("Organization Mission (brief)", key="org_mission", disabled=disabled)
 
@@ -704,6 +726,11 @@ def org_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]:
         "exec_dir": exec_dir,
         "exec_email": exec_email,
         "exec_phone": exec_phone,
+        "payment_address_1": payment_address_1,
+        "payment_address_2": payment_address_2,
+        "payment_city": payment_city,
+        "payment_state": payment_state,
+        "payment_zip": payment_zip,
         "mission": mission,
         "eligibility": {
             "nonprofit": eligible_nonprofit,
@@ -724,8 +751,12 @@ def org_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]:
     uploads = {}
     if submitted:
         missing = _missing_org_fields(org_name, applicant_name, email, project_title)
+        address_missing = _missing_payment_address_fields(payment_address_1, payment_city, payment_state, payment_zip)
         if missing:
             st.warning("Please complete all required fields marked with * before submitting. Missing: " + ", ".join(missing), icon="⚠️")
+            submitted = False
+        elif address_missing:
+            st.warning("Please complete the mailing address fields before submitting. Missing: " + ", ".join(address_missing), icon="⚠️")
             submitted = False
         elif not all([eligible_nonprofit, eligible_report, eligible_benefit]):
             st.warning("Please confirm all eligibility checkboxes.", icon="⚠️")
@@ -764,6 +795,14 @@ def student_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]
     advisor_title = st.text_input("Advisor Title/Role", key="stu_advisor_title", disabled=disabled)
     advisor_email = st.text_input("Advisor Email", key="stu_advisor_email", disabled=disabled)
 
+    st.markdown("**Mailing Address for Grant Award Payment**")
+    st.caption("If this application is funded, the grant award check will be mailed to this address.")
+    payment_address_1 = st.text_input("Address Line 1*", key="stu_payment_address_1", disabled=disabled)
+    payment_address_2 = st.text_input("Address Line 2", key="stu_payment_address_2", disabled=disabled)
+    payment_city = st.text_input("City*", key="stu_payment_city", disabled=disabled)
+    payment_state = st.text_input("State*", key="stu_payment_state", disabled=disabled)
+    payment_zip = st.text_input("ZIP Code*", key="stu_payment_zip", disabled=disabled)
+
     st.markdown("**Eligibility (must confirm all):**")
     elig_enrolled = st.checkbox("I am currently enrolled at Quinnipiac (Netter) or Yale SOM.", key="stu_elig_enrolled", disabled=disabled)
     elig_report = st.checkbox("If awarded, I will present results at the NHCMA winter meeting in 2026 (date TBA).", key="stu_elig_report", disabled=disabled)
@@ -798,6 +837,11 @@ def student_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]
         "advisor_name": advisor_name,
         "advisor_title": advisor_title,
         "advisor_email": advisor_email,
+        "payment_address_1": payment_address_1,
+        "payment_address_2": payment_address_2,
+        "payment_city": payment_city,
+        "payment_state": payment_state,
+        "payment_zip": payment_zip,
         "eligibility": {
             "enrolled_qu_yale": elig_enrolled,
             "report_at_winter_meeting_2026": elig_report,
@@ -820,8 +864,12 @@ def student_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]
         if school_norm == "— Select your school —":
             school_norm = ""
         missing = _missing_student_fields(applicant_name, school_norm, email, phone, project_title)
+        address_missing = _missing_payment_address_fields(payment_address_1, payment_city, payment_state, payment_zip)
         if missing:
             st.warning("Please complete all required fields marked with * before submitting. Missing: " + ", ".join(missing), icon="⚠️")
+            submitted = False
+        elif address_missing:
+            st.warning("Please complete the mailing address fields before submitting. Missing: " + ", ".join(address_missing), icon="⚠️")
             submitted = False
         elif not all([elig_enrolled, elig_report]):
             st.warning("Please confirm all eligibility checkboxes.", icon="⚠️")
