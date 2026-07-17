@@ -1,11 +1,13 @@
 # --- Imports ---
-import os, json, smtplib, io, hashlib, pathlib
-from email.message import EmailMessage
+import os, json, io, hashlib, pathlib
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, Tuple, Optional
 from urllib.parse import urlparse, parse_qs
 from urllib.parse import quote
+from urllib.request import Request, urlopen
+from urllib.parse import urlencode
+from urllib.error import HTTPError, URLError
 import pandas as pd
 import streamlit as st
 from supabase import create_client, Client
@@ -14,14 +16,59 @@ import secrets
 from itsdangerous import URLSafeTimedSerializer
 from streamlit_cookies_manager import EncryptedCookieManager
 
-APP_TITLE = "NHCMA Foundation — 2025 Public Health Innovation Grants"
+APP_TITLE = "NHCMA Foundation — Public Health Innovation Grants"
 TIMEZONE = "America/New_York"
+DEFAULT_APPLICATION_YEAR = 2026
+YEAR_MIN = 2020
+YEAR_MAX = 2100
+UNASSIGNED_YEAR_OPTION = "Unassigned"
+ADMIN_NOTIFICATION_EMAIL = (
+    os.getenv("ADMIN_NOTIFICATION_EMAIL")
+    or st.secrets.get("ADMIN_NOTIFICATION_EMAIL")
+    or "office@nhcma.org"
+)
 
 # ========= Admin-configurable Deadlines =========
 SETTINGS_KEYS = {
+    "year": "application_year",
     "org": "org_deadline_iso",
     "stu": "stu_deadline_iso",
 }
+
+
+def _coerce_application_year(value: Any) -> Optional[int]:
+    try:
+        year = int(str(value).strip())
+    except Exception:
+        return None
+    if YEAR_MIN <= year <= YEAR_MAX:
+        return year
+    return None
+
+
+def get_application_year(sb_read) -> int:
+    """Return configured application year from app_settings with safe fallback."""
+    fallback = DEFAULT_APPLICATION_YEAR
+    try:
+        rows = sb_read.table("app_settings").select("key,value") \
+            .eq("key", SETTINGS_KEYS["year"]).limit(1).execute().data or []
+        if not rows:
+            return fallback
+        parsed = _coerce_application_year(rows[0].get("value"))
+        return parsed if parsed is not None else fallback
+    except Exception:
+        return fallback
+
+
+def set_application_year(sb_write, year: int):
+    """Persist application year as text in app_settings.value."""
+    parsed = _coerce_application_year(year)
+    if parsed is None:
+        raise ValueError(f"Application year must be between {YEAR_MIN} and {YEAR_MAX}.")
+    sb_write.table("app_settings").upsert(
+        {"key": SETTINGS_KEYS["year"], "value": str(parsed)},
+        on_conflict="key"
+    ).execute()
 
 def _parse_iso_to_et(iso_s: str, fallback_dt: datetime) -> datetime:
     try:
@@ -35,9 +82,9 @@ def _parse_iso_to_et(iso_s: str, fallback_dt: datetime) -> datetime:
 
 def get_deadlines(sb_read) -> tuple[datetime, datetime]:
     """Return (ORG_DEADLINE_ET, STU_DEADLINE_ET) with DB override if present."""
-    # hardcoded fallback (kept!)
-    org_fb = datetime(2025, 12, 27, 23, 59, tzinfo=ZoneInfo(TIMEZONE))
-    stu_fb = datetime(2025, 12, 27, 23, 59, tzinfo=ZoneInfo(TIMEZONE))
+    # hardcoded fallback (kept)
+    org_fb = datetime(2026, 12, 27, 23, 59, tzinfo=ZoneInfo(TIMEZONE))
+    stu_fb = datetime(2026, 12, 27, 23, 59, tzinfo=ZoneInfo(TIMEZONE))
     try:
         rows = sb_read.table("app_settings").select("key,value").in_("key", [
             SETTINGS_KEYS["org"], SETTINGS_KEYS["stu"]
@@ -70,7 +117,7 @@ def get_president_settings(sb_read) -> Dict[str, str]:
     defaults = {
         "name": "Steve Saunders, MD, MBA",
         "title": "President",
-        "email": "nhcma@lutinemanagement.com",
+        "email": ADMIN_NOTIFICATION_EMAIL,
     }
     try:
         rows = sb_read.table("app_settings").select("key,value") \
@@ -95,7 +142,7 @@ def set_president_settings(sb_write, name: str, title: str, email: str) -> None:
 # ========= /President Info =========
 
 # --- Build/Version Banner (always visible, no duplicates) ---
-st.set_page_config(page_title=APP_TITLE, layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="NHCMA Foundation Grants", layout="wide", initial_sidebar_state="collapsed")
 
 APP_VERSION = os.environ.get("APP_VERSION", "")        # set in Streamlit env vars (optional)
 APP_COMMIT  = os.environ.get("APP_COMMIT", "")         # optional short SHA from git
@@ -117,7 +164,7 @@ EDGE_BASE   = f"https://{PROJECT_REF}.supabase.co/functions/v1"
 # Currently managed in code; will be exposed in Admin UI later.
 
 TEST_OVERRIDE = False
-TEST_OVERRIDE_EMAIL = "ray@lutinemanagement.com"
+TEST_OVERRIDE_EMAIL = ADMIN_NOTIFICATION_EMAIL
 
 # ========= Grant Decision Helpers =========
 # decision: "funded" or "declined"
@@ -206,9 +253,9 @@ def submission_notice():
         "if you leave before submitting, you will need to start over."
     )
 
-# Deadlines (ET)
-ORG_DEADLINE = datetime(2025, 12, 27, 23, 59, tzinfo=ZoneInfo(TIMEZONE))
-STU_DEADLINE = datetime(2025, 12, 27, 23, 59, tzinfo=ZoneInfo(TIMEZONE))
+# Deadlines (ET) fallback values until settings are loaded
+ORG_DEADLINE = datetime(2026, 12, 27, 23, 59, tzinfo=ZoneInfo(TIMEZONE))
+STU_DEADLINE = datetime(2026, 12, 27, 23, 59, tzinfo=ZoneInfo(TIMEZONE))
 
 # Supabase config
 _sb = st.secrets.get("supabase", {})
@@ -232,6 +279,8 @@ def supabase_client() -> Client:
     return create_client(str(SUPABASE_URL), str(SUPABASE_ANON_KEY))
 
 sb = supabase_client()
+ACTIVE_APPLICATION_YEAR = get_application_year(sb_admin or sb)
+APP_TITLE = f"NHCMA Foundation — {ACTIVE_APPLICATION_YEAR} Public Health Innovation Grants"
 
 # ========= Judge PIN + Cookie Sessions (lazy init) =========
 SESSION_TTL_DAYS = int(st.secrets.get("SESSION_TTL_DAYS", "30"))
@@ -348,15 +397,40 @@ def clear_cookie_session():
 
     # ========= /Judge PIN + Cookie Sessions =========
 
-# SMTP config (supports flat keys or [smtp] section)
-_smtp = st.secrets.get("smtp", {})
-SMTP_HOST = os.getenv("SMTP_HOST") or st.secrets.get("SMTP_HOST") or _smtp.get("host", "smtp.office365.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT") or st.secrets.get("SMTP_PORT") or _smtp.get("port", 587))
-SMTP_USER = os.getenv("SMTP_USER") or st.secrets.get("SMTP_USER") or _smtp.get("user")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD") or st.secrets.get("SMTP_PASSWORD") or _smtp.get("password")
-SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL") or st.secrets.get("SMTP_FROM_EMAIL") or _smtp.get("from_addr") or SMTP_USER
-SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME") or st.secrets.get("SMTP_FROM_NAME") or _smtp.get("from_name", "NHCMA Foundation Grants")
-CC_EMAIL = "nhcma@lutinemanagement.com"
+# Microsoft Graph config (supports flat keys or [graph] section)
+_graph = st.secrets.get("graph", {})
+GRAPH_TENANT_ID = os.getenv("MS_TENANT_ID") or st.secrets.get("MS_TENANT_ID") or _graph.get("tenant_id")
+GRAPH_CLIENT_ID = os.getenv("MS_CLIENT_ID") or st.secrets.get("MS_CLIENT_ID") or _graph.get("client_id")
+GRAPH_CLIENT_SECRET = os.getenv("MS_CLIENT_SECRET") or st.secrets.get("MS_CLIENT_SECRET") or _graph.get("client_secret")
+GRAPH_SENDER_EMAIL = os.getenv("MS_SENDER_EMAIL") or st.secrets.get("MS_SENDER_EMAIL") or _graph.get("sender")
+GRAPH_FROM_NAME = os.getenv("MS_FROM_NAME") or st.secrets.get("MS_FROM_NAME") or _graph.get("from_name", "NHCMA Foundation Grants")
+CC_EMAIL = ADMIN_NOTIFICATION_EMAIL
+
+
+def _graph_access_token() -> Optional[str]:
+    if not (GRAPH_TENANT_ID and GRAPH_CLIENT_ID and GRAPH_CLIENT_SECRET):
+        return None
+
+    token_url = f"https://login.microsoftonline.com/{GRAPH_TENANT_ID}/oauth2/v2.0/token"
+    body = urlencode({
+        "client_id": GRAPH_CLIENT_ID,
+        "client_secret": GRAPH_CLIENT_SECRET,
+        "grant_type": "client_credentials",
+        "scope": "https://graph.microsoft.com/.default",
+    }).encode("utf-8")
+
+    req = Request(
+        token_url,
+        data=body,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    try:
+        with urlopen(req, timeout=20) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+            return payload.get("access_token")
+    except Exception:
+        return None
 
 
 def too_late(deadline: datetime) -> bool:
@@ -415,7 +489,7 @@ def insert_submission(track: str, applicant_name: str, email: str, phone: str, p
         "applicant_name": (applicant_name or "").strip(),
         "email": (email or "").strip(),
         "phone": (phone or "").strip(),
-        "application_year": 2026,
+        "application_year": ACTIVE_APPLICATION_YEAR,
         "payload_json": payload,
         "uploads_json": uploads,
     }
@@ -443,6 +517,9 @@ def load_submissions_df() -> pd.DataFrame:
     if df.empty:
         return df
 
+    if "application_year" not in df.columns:
+        df["application_year"] = None
+
     # Expand payload_json into columns dynamically
     payloads = pd.json_normalize(df["payload_json"])
     payloads = payloads.add_prefix("Q: ")   # optional prefix for clarity
@@ -459,28 +536,104 @@ def load_submissions_df() -> pd.DataFrame:
     df = pd.concat([df.drop(["payload_json","uploads_json"], axis=1), payloads, uploads], axis=1)
     return df
 
+
+def _normalize_application_year_column(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    if "application_year" not in out.columns:
+        out["application_year"] = None
+    out["application_year_norm"] = out["application_year"].apply(_coerce_application_year)
+    return out
+
+
+def _view_year_options(df: pd.DataFrame, active_year: int) -> list[str]:
+    years = set()
+    include_unassigned = False
+    if df is not None and not df.empty:
+        norm = _normalize_application_year_column(df)
+        years = {int(y) for y in norm["application_year_norm"].dropna().tolist()}
+        include_unassigned = norm["application_year_norm"].isna().any()
+    years.add(int(active_year))
+    options = [str(y) for y in sorted(years)]
+    if include_unassigned:
+        options.append(UNASSIGNED_YEAR_OPTION)
+    return options
+
+
+def _filter_submissions_by_year_option(df: pd.DataFrame, selected_year_option: str) -> pd.DataFrame:
+    if df is None:
+        return pd.DataFrame()
+    norm = _normalize_application_year_column(df)
+    if selected_year_option == UNASSIGNED_YEAR_OPTION:
+        return norm[norm["application_year_norm"].isna()].copy()
+    selected_year = _coerce_application_year(selected_year_option)
+    if selected_year is None:
+        return norm.iloc[0:0].copy()
+    return norm[norm["application_year_norm"] == selected_year].copy()
+
 # ----------------------------
 # Email
 # ----------------------------
 def send_email(to_email: str, cc_email: Optional[str], subject: str, html_body: str) -> bool:
-    """Send email via Office365 SMTP using secrets. Returns True on success."""
-    if not (SMTP_USER and SMTP_PASSWORD and SMTP_FROM_EMAIL):
-        st.warning("Email not sent: SMTP credentials are missing in secrets.")
+    """Send email via Microsoft Graph using client credentials. Returns True on success."""
+    if not (GRAPH_TENANT_ID and GRAPH_CLIENT_ID and GRAPH_CLIENT_SECRET and GRAPH_SENDER_EMAIL):
+        st.warning("Email not sent: Microsoft Graph credentials are missing in secrets.")
         return False
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = f"{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>"
-    msg["To"] = to_email
+
+    token = _graph_access_token()
+    if not token:
+        st.warning("Email not sent: could not acquire Microsoft Graph access token.")
+        return False
+
+    message = {
+        "subject": subject,
+        "body": {
+            "contentType": "HTML",
+            "content": html_body,
+        },
+        "toRecipients": [{"emailAddress": {"address": to_email}}],
+        "from": {
+            "emailAddress": {
+                "address": GRAPH_SENDER_EMAIL,
+                "name": GRAPH_FROM_NAME,
+            }
+        },
+    }
     if cc_email:
-        msg["Cc"] = cc_email
-    msg.set_content("This email requires an HTML-capable client.")
-    msg.add_alternative(html_body, subtype="html")
+        message["ccRecipients"] = [{"emailAddress": {"address": cc_email}}]
+
+    payload = {
+        "message": message,
+        "saveToSentItems": True,
+    }
+
+    endpoint = f"https://graph.microsoft.com/v1.0/users/{quote(GRAPH_SENDER_EMAIL)}/sendMail"
+    req = Request(
+        endpoint,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
     try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-            server.starttls()
-            server.login(SMTP_USER, SMTP_PASSWORD)
-            server.send_message(msg)
-        return True
+        with urlopen(req, timeout=20) as resp:
+            status = getattr(resp, "status", 202)
+            if status in (200, 202):
+                return True
+            st.warning(f"Email send failed: Graph returned status {status}")
+            return False
+    except HTTPError as e:
+        try:
+            details = e.read().decode("utf-8")
+        except Exception:
+            details = str(e)
+        st.warning(f"Email send failed: Graph HTTP {e.code} {details}")
+        return False
+    except URLError as e:
+        st.warning(f"Email send failed: Graph network error {e}")
+        return False
     except Exception as e:
         st.warning(f"Email send failed: {e}")
         return False
@@ -493,14 +646,14 @@ def build_confirmation_email(track: str, payload: Dict[str, Any], record_id: Opt
     school = payload.get("school","") if track=="student" else ""
     lines = [
         f"<p>Dear {payload.get('applicant_name','Applicant')},</p>",
-        "<p>Thank you for your submission to the <strong>NHCMA Foundation — 2025 Public Health Innovation Grants</strong>.</p>",
+        f"<p>Thank you for your submission to the <strong>NHCMA Foundation — {ACTIVE_APPLICATION_YEAR} Public Health Innovation Grants</strong>.</p>",
         f"<p><strong>Track:</strong> {track.title()}<br>",
         f"<strong>Project Title:</strong> {title or '—'}<br>",
         f"{'<strong>Organization:</strong> '+org+'<br>' if org else ''}",
         f"{'<strong>School:</strong> '+school+'<br>' if school else ''}",
         f"<strong>Timestamp:</strong> {ts}<br>",
         f"<strong>Submission ID:</strong> {record_id or '—'}</p>",
-        "<p>We will contact you if additional information is needed. Questions may be directed to <a href='mailto:nhcma@lutinemanagement.com'>nhcma@lutinemanagement.com</a>.</p>",
+        f"<p>We will contact you if additional information is needed. Questions may be directed to <a href='mailto:{ADMIN_NOTIFICATION_EMAIL}'>{ADMIN_NOTIFICATION_EMAIL}</a>.</p>",
         "<p>— NHCMA Foundation</p>"
     ]
     return "\n".join(lines)
@@ -542,7 +695,7 @@ def build_award_letter_html(sub: Dict[str, Any], pres: Dict[str, str], amount: f
         (
             "<p>Please note that checks will be mailed within the next week. "
             "To ensure we have the correct mailing address, kindly email your preferred address to the "
-            "NHCMA staff at <a href='mailto:NHCMA@lutinemanagement.com'>NHCMA@lutinemanagement.com</a>.</p>"
+            f"NHCMA staff at <a href='mailto:{ADMIN_NOTIFICATION_EMAIL}'>{ADMIN_NOTIFICATION_EMAIL}</a>.</p>"
         ),
 
         "<p>Please feel free to reach out for any further assistance or clarification. "
@@ -570,7 +723,7 @@ def build_decline_letter_html(sub: Dict[str, Any], pres: Dict[str, str]) -> str:
 
         (
             "<p>Thank you for submitting your proposal to the "
-            "<strong>NHCMA Foundation — 2025 Public Health Innovation Grants</strong>. "
+            f"<strong>NHCMA Foundation — {ACTIVE_APPLICATION_YEAR} Public Health Innovation Grants</strong>. "
             "This year we received a large number of thoughtful and high-quality applications.</p>"
         ),
 
@@ -664,7 +817,7 @@ def _missing_payment_address_fields(payment_address_1, payment_city, payment_sta
 # Forms with unique keys
 # ----------------------------
 def org_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]:
-    st.subheader("Organization Application (2025)", anchor="org")
+    st.subheader(f"Organization Application ({ACTIVE_APPLICATION_YEAR})", anchor="org")
     submission_notice()
     st.caption(
     f"Submission deadline: **{ORG_DEADLINE.strftime('%B %d, %Y at %I:%M %p %Z')}**\n\n_Required fields are marked with *_."
@@ -769,7 +922,7 @@ def org_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]:
     return submitted, payload, uploads, applicant_name, email, (phone or "")
 
 def student_form() -> Tuple[bool, Dict[str, Any], Dict[str, str], str, str, str]:
-    st.subheader("Medical Student Application (2025)", anchor="stu")
+    st.subheader(f"Medical Student Application ({ACTIVE_APPLICATION_YEAR})", anchor="stu")
     submission_notice()
     st.caption(
     f"Submission deadline: **{STU_DEADLINE.strftime('%B %d, %Y at %I:%M %p %Z')}**\n\n_Required fields are marked with *_."
@@ -962,14 +1115,76 @@ def canonical_flatten(row):
 
     return sub_flat
 
+
+def render_grant_cycle_settings():
+    st.subheader("Grant Cycle Settings")
+
+    current_year = get_application_year(sb_admin or sb)
+    _org_deadline, _stu_deadline = get_deadlines(sb_admin or sb)
+
+    year_in = st.number_input(
+        "Application Year",
+        min_value=YEAR_MIN,
+        max_value=YEAR_MAX,
+        value=int(current_year),
+        step=1,
+        key="cycle_year_input"
+    )
+
+    colA, colB = st.columns(2)
+    with colA:
+        org_date = st.date_input(
+            "Organization Application Deadline Date",
+            value=_org_deadline.date(),
+            key="org_dl_date",
+        )
+        org_time = st.time_input(
+            "Organization Application Deadline Time",
+            value=_org_deadline.timetz(),
+            key="org_dl_time"
+        )
+    with colB:
+        stu_date = st.date_input(
+            "Medical Student Application Deadline Date",
+            value=_stu_deadline.date(),
+            key="stu_dl_date"
+        )
+        stu_time = st.time_input(
+            "Medical Student Application Deadline Time",
+            value=_stu_deadline.timetz(),
+            key="stu_dl_time"
+        )
+
+    save_cycle = st.button("Save Grant Cycle Settings", type="primary", key="save_cycle_settings_btn")
+    if save_cycle:
+        if not sb_admin:
+            st.error("Service-role key is not configured; cannot save settings.")
+        else:
+            parsed_year = _coerce_application_year(year_in)
+            if parsed_year is None:
+                st.error(f"Application year must be between {YEAR_MIN} and {YEAR_MAX}.")
+                return
+
+            org_new = datetime.combine(org_date, org_time, tzinfo=ZoneInfo(TIMEZONE))
+            stu_new = datetime.combine(stu_date, stu_time, tzinfo=ZoneInfo(TIMEZONE))
+            try:
+                set_application_year(sb_admin, int(parsed_year))
+                set_deadline(sb_admin, "organization", org_new)
+                set_deadline(sb_admin, "student", stu_new)
+                st.success("Grant cycle settings saved.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Failed to save grant cycle settings: {e}")
+
 # ----------------------------
 # Admin
 # ----------------------------
-def admin_panel():
+def admin_panel(selected_year_option: str, submissions_all: Optional[pd.DataFrame] = None):
     st.subheader("Admin — Submissions & Export")
-    df = load_submissions_df()
+    df_all = submissions_all if submissions_all is not None else load_submissions_df()
+    df = _filter_submissions_by_year_option(df_all, selected_year_option)
     if df.empty:
-        st.info("No submissions yet.")
+        st.info(f"No submissions for application year: {selected_year_option}.")
         return
 
     # ===== Anchor #DF_ID_RESTORE =====
@@ -1122,14 +1337,6 @@ def admin_panel():
 
         payload = raw_row.get("payload_json", {}) or {}
 
-        # ===================== DEBUG DUMP =====================
-        # st.markdown("### DEBUG — raw_row")
-        # st.json(raw_row)
-
-        # st.markdown("### DEBUG — payload_json")
-        # st.json(payload)
-        # ======================================================
-
         # Start with full lowercase normalized dict
         sub_row_flat = {k.lower(): v for k, v in raw_row.items()}
         sub_row_flat.update({k.lower(): v for k, v in payload.items()})
@@ -1258,9 +1465,7 @@ def admin_panel():
 
         st.markdown("### Send Email Notification")
 
-        # TEMP OVERRIDE FOR TESTING — redirects all emails to Ray
-        recipient = "ray@lutinemanagement.com"
-        # recipient = sub_row_flat.get("email", "").strip()
+        recipient = sub_row_flat.get("email", "").strip()
         if not recipient:
             st.warning("No applicant email found in record — cannot send.", icon="⚠️")
         else:
@@ -1288,7 +1493,7 @@ def admin_panel():
                         "html": html
                     }
                 else:
-                    st.error("Email failed to send. Check SMTP settings.", icon="❌")
+                    st.error("Email failed to send. Check Microsoft Graph email configuration.", icon="❌")
 
             # Re-send option if previously sent
             prev_key = f"last_sent_{selected_id}"
@@ -1319,7 +1524,7 @@ def admin_panel():
         st.info(
             "This will save all decisions currently selected in the table "
             "and send the corresponding email (award or decline) to each applicant.\n\n"
-            "**Test mode**: If TEST_OVERRIDE is enabled, all emails go to Ray only."
+            f"**Test mode**: If TEST_OVERRIDE is enabled, all emails go to {TEST_OVERRIDE_EMAIL} only."
         )
 
         if st.button("Save ALL Decisions and Send ALL Emails", type="primary"):
@@ -1457,7 +1662,7 @@ def admin_panel():
                     continue
 
                 # ---------------------------------------------------------
-                # Send email via same SMTP function used for single sends
+                # Send email via same Graph email helper used for single sends
                 # ---------------------------------------------------------
                 try:
                     ok = send_email(
@@ -1474,7 +1679,7 @@ def admin_panel():
                         else:
                             results.append((sub_id, f"✅ Email sent to {real_email}"))
                     else:
-                        results.append((sub_id, "❌ SMTP send failed"))
+                        results.append((sub_id, "❌ Graph email send failed"))
                 except Exception as e:
                     results.append((sub_id, f"❌ Email error: {e}"))
 
@@ -1515,9 +1720,27 @@ def admin_panel():
         st.secrets["SUPABASE_SERVICE_ROLE_KEY"]
     )
 
+    selected_year_num = _coerce_application_year(selected_year_option)
+    booklet_track = st.radio(
+        "Booklet Track",
+        ["organization", "student"],
+        horizontal=True,
+        key="admin_booklet_track"
+    )
+
+    df_for_booklets = _filter_submissions_by_year_option(df_all, selected_year_option)
+    if "track" in df_for_booklets.columns:
+        df_for_booklets = df_for_booklets[df_for_booklets["track"] == booklet_track].copy()
+    else:
+        df_for_booklets = df_for_booklets.iloc[0:0].copy()
+
     col_a, col_b = st.columns([1, 1])
     with col_a:
-        run_all = st.button("Build ALL Booklets Now", type="primary")
+        run_all = st.button(
+            f"Build {booklet_track.title()} Booklets Now",
+            type="primary",
+            disabled=(selected_year_num is None or df_for_booklets.empty)
+        )
 
     # Optional future filter if 'status' column is implemented
     # with col_b:
@@ -1527,7 +1750,10 @@ def admin_panel():
     #     )
     # where = {"status": "submitted"} if only_submitted else None
 
-    where = None  # currently build all rows
+    where = (
+        {"application_year": selected_year_num, "track": booklet_track}
+        if selected_year_num is not None else None
+    )
 
     if run_all:
 
@@ -1544,9 +1770,12 @@ def admin_panel():
         ok = sum(1 for r in report if r.get("status") == "ok")
         err = sum(1 for r in report if r.get("status") == "error")
         st.write(f"Built {ok} OK / {err} errors")
-        st.write("DEBUG – report count:", len(report))
 
     st.caption("Tip: you can re-run the build any time after submissions are frozen.")
+    if selected_year_num is None:
+        st.info("Booklet generation supports numeric application years only.")
+    elif df_for_booklets.empty:
+        st.info(f"No {booklet_track} submissions are available for application year {selected_year_option}.")
 
     st.divider()
     with st.expander("🖋️ President Contact for Letters", expanded=False):
@@ -1569,37 +1798,6 @@ def admin_panel():
                 st.toast("Updated president contact for letters.", icon="📨")
             except Exception as e:
                 st.error(f"Failed to save: {e}")
-
-    st.divider()
-    with st.expander("⚙️ Submission Deadlines", expanded=False):
-        # Load current values
-        _org_deadline, _stu_deadline = get_deadlines(sb_admin or sb)
-
-        colA, colB = st.columns(2)
-        with colA:
-            st.caption("Organization Deadline (ET)")
-            org_date = st.date_input("Date", value=_org_deadline.date(), key="org_dl_date")
-            org_time = st.time_input("Time", value=_org_deadline.timetz(), key="org_dl_time")
-        with colB:
-            st.caption("Student Deadline (ET)")
-            stu_date = st.date_input("Date ", value=_stu_deadline.date(), key="stu_dl_date")
-            stu_time = st.time_input("Time ", value=_stu_deadline.timetz(), key="stu_dl_time")
-
-        save = st.button("Save Deadlines", type="primary", key="save_deadlines_btn")
-        if save:
-            if not sb_admin:
-                st.error("Service-role key is not configured; cannot save settings.")
-            else:
-                org_new = datetime.combine(org_date, org_time, tzinfo=ZoneInfo(TIMEZONE))
-                stu_new = datetime.combine(stu_date, stu_time, tzinfo=ZoneInfo(TIMEZONE))
-                try:
-                    set_deadline(sb_admin, "organization", org_new)
-                    set_deadline(sb_admin, "student", stu_new)
-                    st.success("Deadlines saved.")
-                    st.toast("Deadlines updated", icon="✅")
-                except Exception as e:
-                    st.error(f"Failed to save deadlines: {e}")
-
 
 def _judging_enabled() -> bool:
     """Feature flag for the Judging module. Defaults to True so you can test immediately."""
@@ -1650,11 +1848,14 @@ def _send_invite(judge_email: str, full_name: str, app_base_url: str | None = No
         <p>If you didn't expect this, you can ignore this message.</p>
     """
 
-    # Send using your existing SMTP helper (to, cc, subject, html)
+    # Send using the existing email helper (to, cc, subject, html)
     send_email(judge_email, CC_EMAIL, subject, body_html)
 
-def admin_judging_tools(app_base_url: str | None = None):
+def admin_judging_tools(selected_year_option: str, app_base_url: str | None = None):
     st.subheader("Judges & Invites")
+
+    if "last_generated_judge_invite_url" not in st.session_state:
+        st.session_state["last_generated_judge_invite_url"] = ""
 
     # --- Invite form ---
     with st.form("invite_form", clear_on_submit=False):
@@ -1664,7 +1865,7 @@ def admin_judging_tools(app_base_url: str | None = None):
         with colA:
             send = st.form_submit_button("Send Invite")
         with colB:
-            gen_only = st.form_submit_button("Generate Link (no email)")  # test without SMTP
+            gen_only = st.form_submit_button("Generate Link (no email)")
 
     # --- Validation + actions ---
     if send or gen_only:
@@ -1683,8 +1884,7 @@ def admin_judging_tools(app_base_url: str | None = None):
 
         # Always show the URL so you can copy/paste to test
         invite_url = f"https://nhcmafoundationgrants.streamlit.app/?invite_token={token}"
-        # st.code(invite_url, language="text")
-        # st.toast("Invite link generated.", icon="🔗") ----Return these if we want to display token when judge is added
+        st.session_state["last_generated_judge_invite_url"] = invite_url
 
         if send:
             subject = "NHCMA Foundation Grants — Your Judge Invite"
@@ -1698,6 +1898,14 @@ def admin_judging_tools(app_base_url: str | None = None):
                 st.success(f"Invite sent to {name or email} ({email}).", icon="✅")
             else:
                 st.error("Email failed to send. You can copy the link above and send manually.", icon="✉️")
+                st.info("Microsoft Graph delivery failed. Copy the invitation link below and send it manually.")
+        else:
+            st.success("Invitation link generated. Copy and share it manually.", icon="🔗")
+
+    last_invite_url = (st.session_state.get("last_generated_judge_invite_url") or "").strip()
+    if last_invite_url:
+        st.markdown("**Generated judging invitation link (copy this):**")
+        st.code(last_invite_url, language="text")
 
     # ----------------------------
     # Bulk Invite via CSV
@@ -1815,7 +2023,12 @@ def admin_judging_tools(app_base_url: str | None = None):
     except Exception:
         sc = pd.DataFrame()
 
-    subs = load_submissions_df()
+    subs = _filter_submissions_by_year_option(load_submissions_df(), selected_year_option)
+    valid_ids = set(subs["id"].astype(int).tolist()) if (subs is not None and not subs.empty and "id" in subs.columns) else set()
+    if not sc.empty and valid_ids:
+        sc = sc[sc["submission_id"].isin(valid_ids)].copy()
+    elif not sc.empty and not valid_ids:
+        sc = pd.DataFrame()
     if sc.empty or subs is None or subs.empty:
         st.info("No scores yet.")
     else:
@@ -1877,7 +2090,12 @@ def admin_judging_tools(app_base_url: str | None = None):
     except Exception:
         sc = pd.DataFrame()
 
-    subs = load_submissions_df()
+    subs = _filter_submissions_by_year_option(load_submissions_df(), selected_year_option)
+    valid_ids = set(subs["id"].astype(int).tolist()) if (subs is not None and not subs.empty and "id" in subs.columns) else set()
+    if not sc.empty and valid_ids:
+        sc = sc[sc["submission_id"].isin(valid_ids)].copy()
+    elif not sc.empty and not valid_ids:
+        sc = pd.DataFrame()
 
     if sc.empty or subs is None or subs.empty:
         st.info("No detailed scores available yet.")
@@ -1971,21 +2189,36 @@ def judging_portal():
         return
 
     # Load submissions
-    df = load_submissions_df()
-    if df is None or df.empty:
+    submissions_df = load_submissions_df()
+    if submissions_df is None or submissions_df.empty:
         st.info("No submissions available yet.")
         return
 
+    year_options = _view_year_options(submissions_df, ACTIVE_APPLICATION_YEAR)
+    default_year = str(ACTIVE_APPLICATION_YEAR)
+    default_year_index = year_options.index(default_year) if default_year in year_options else 0
+    selected_year_option = st.selectbox(
+        "View Application Year",
+        options=year_options,
+        index=default_year_index,
+        key="judge_view_year"
+    )
+
+    # Apply year filter first, then track filter.
+    submissions_year_df = _filter_submissions_by_year_option(submissions_df, selected_year_option)
+    if submissions_year_df.empty:
+        st.info(f"No submissions for application year: {selected_year_option}.")
+        return
+
     # Normalize display columns
-    df["Project Title"] = df.get("Q: project_title", df.get("project_title", ""))
-    df["Org Name"]      = df.get("Q: org_name", df.get("org_name", ""))
-    df["School"]        = df.get("Q: school", df.get("school", ""))
+    submissions_year_df["Project Title"] = submissions_year_df.get("Q: project_title", submissions_year_df.get("project_title", ""))
+    submissions_year_df["Org Name"] = submissions_year_df.get("Q: org_name", submissions_year_df.get("org_name", ""))
+    submissions_year_df["School"] = submissions_year_df.get("Q: school", submissions_year_df.get("school", ""))
 
     # Pick a default track that actually has rows
-    tracks_present = [t for t in ["student", "organization"] if t in set(df["track"].dropna().tolist())]
+    tracks_present = [t for t in ["organization", "student"] if t in set(submissions_year_df["track"].dropna().tolist())]
     if not tracks_present:
         st.info("Submissions table is present, but no recognized tracks ('student'/'organization') were found.")
-        st.dataframe(df, use_container_width='stretch')
         return
 
     default_track = tracks_present[0]
@@ -1993,18 +2226,18 @@ def judging_portal():
                      index=["student", "organization"].index(default_track))
 
     # Filter to chosen track
-    sdf = df[df["track"] == track].copy()
-    if sdf.empty:
-        st.info(f"No submissions for the **{track}** track yet.")
+    submissions_year_track_df = submissions_year_df[submissions_year_df["track"] == track].copy()
+    if submissions_year_track_df.empty:
+        st.info(f"No {track} submissions are available for application year {selected_year_option}.")
         return
 
     # Convert columns to Edge links before displaying
     for col in ["Proposal URL", "Budget URL", "Other URL"]:
-        if col in sdf.columns:
-            sdf[col] = sdf[col].apply(to_edge)
+        if col in submissions_year_track_df.columns:
+            submissions_year_track_df[col] = submissions_year_track_df[col].apply(to_edge)
 
     st.dataframe(
-        sdf[["id","Project Title","Org Name","School","Proposal URL","Budget URL"]].fillna(""),
+        submissions_year_track_df[["id","Project Title","Org Name","School","Proposal URL","Budget URL"]].fillna(""),
         use_container_width='stretch',
         column_config={
             "Proposal URL": st.column_config.LinkColumn("Proposal URL"),
@@ -2014,7 +2247,10 @@ def judging_portal():
     )
 
     # Submission chooser
-    options = [(int(r["id"]), f"#{int(r['id'])}: {r['Project Title'] or '(untitled)'}") for _, r in sdf.iterrows()]
+    options = [
+        (int(r["id"]), f"#{int(r['id'])}: {r['Project Title'] or '(untitled)'}")
+        for _, r in submissions_year_track_df.iterrows()
+    ]
     if not options:
         st.info("No selectable submissions found for this track.")
         return
@@ -2029,7 +2265,7 @@ def judging_portal():
     )
 
     # Locate this submission's row to get the stored booklet path
-    selected_row = sdf.loc[sdf["id"] == submission_id].iloc[0]
+    selected_row = submissions_year_track_df.loc[submissions_year_track_df["id"] == submission_id].iloc[0]
     path = selected_row.get("booklet_docx_path")
 
     if path and str(path).strip().lower() not in {"", "none", "null"}:
@@ -2043,7 +2279,7 @@ def judging_portal():
     prev = []
     try:
         prev = sb_admin.table("scores").select("*") \
-            .eq("submission_id", submission_id).eq("judge_id", who["judge_id"]).execute().data or []
+            .eq("submission_id", submission_id).eq("judge_id", who["judge_id"]).eq("track", track).execute().data or []
     except Exception:
         prev = []
     prev = prev[0] if prev else {}
@@ -2157,7 +2393,7 @@ with col_logo:
         st.write("")  # blank if logo not present
 with col_title:
     st.title(APP_TITLE)
-    st.write("**Grant Amount:** Up to $2,500 • **Submission Year:** 2025")
+    st.write(f"**Grant Amount:** Up to $2,500 • **Submission Year:** {ACTIVE_APPLICATION_YEAR}")
 
 # Instructions / Notice
 # st.warning(
@@ -2167,7 +2403,7 @@ with col_title:
     # icon="📝"
 # )
 st.info(
-    "Questions? Email the NHCMA Foundation at **nhcma@lutinemanagement.com**.",
+    f"Questions? Email the NHCMA Foundation at **{ADMIN_NOTIFICATION_EMAIL}**.",
     icon="✉️"
 )
 st.divider()
@@ -2181,7 +2417,9 @@ else:
         "Apply — Organizations", "Apply — Medical Students", "Admin"
     ])
 
-# Load deadlines from DB (fallback to defaults)
+# Load cycle settings from DB (fallback to defaults)
+ACTIVE_APPLICATION_YEAR = get_application_year(sb_admin or sb)
+APP_TITLE = f"NHCMA Foundation — {ACTIVE_APPLICATION_YEAR} Public Health Innovation Grants"
 ORG_DEADLINE, STU_DEADLINE = get_deadlines(sb_admin or sb)
 
 with tab1:
@@ -2191,7 +2429,7 @@ with tab1:
         if rid:
             st.success("Thank you! Your organization application has been submitted.")
             # Send confirmation email
-            subject = "NHCMA Foundation — Organization Application Received (2025)"
+            subject = f"NHCMA Foundation — Organization Application Received ({ACTIVE_APPLICATION_YEAR})"
             html = build_confirmation_email("organization", payload, rid)
             send_email(email, CC_EMAIL, subject, html)
         else:
@@ -2204,7 +2442,7 @@ with tab2:
         if rid:
             st.success("Thank you! Your student application has been submitted.")
             # Send confirmation email
-            subject = "NHCMA Foundation — Student Application Received (2025)"
+            subject = f"NHCMA Foundation — Student Application Received ({ACTIVE_APPLICATION_YEAR})"
             html = build_confirmation_email("student", payload, rid)
             send_email(email, CC_EMAIL, subject, html)
         else:
@@ -2212,11 +2450,25 @@ with tab2:
 
 with tab3:
     if _admin_allowed():
-        admin_panel()
+        render_grant_cycle_settings()
+        st.divider()
+
+        submissions_all = load_submissions_df()
+        admin_year_options = _view_year_options(submissions_all, ACTIVE_APPLICATION_YEAR)
+        default_admin_year = str(ACTIVE_APPLICATION_YEAR)
+        default_admin_year_index = admin_year_options.index(default_admin_year) if default_admin_year in admin_year_options else 0
+        selected_admin_year_option = st.selectbox(
+            "View Application Year",
+            options=admin_year_options,
+            index=default_admin_year_index,
+            key="admin_view_year"
+        )
+
+        admin_panel(selected_admin_year_option, submissions_all=submissions_all)
         if _judging_enabled():
             st.divider()
             st.caption("Judging — Invites & Tally")
-            admin_judging_tools()
+            admin_judging_tools(selected_admin_year_option)
     else:
         st.info("Admin locked. Enter the admin password above to view Admin tools.")
         # Do NOT st.stop(); allow Judging tab to render
