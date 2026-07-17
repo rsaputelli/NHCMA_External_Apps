@@ -8,11 +8,15 @@ Two submission tracks: Organizations and Medical Students
 
 File uploads (proposal, budget, other materials) to Supabase Storage
 
-Automatic email confirmations (Office365 SMTP)
+Automatic email confirmations and notifications via Microsoft Graph (application auth)
 
 Admin portal for reviewing, exporting (CSV/XLSX), and downloading submissions
 
-Secrets Configuration (Streamlit Cloud → Settings → Secrets)
+App Email Architecture
+NHCMA Grants app (NHCMA_Grants_App_Supabase.py): Microsoft Graph
+Other apps in this repo may still use SMTP (for example, the Posters app). Keep SMTP documentation separate from Grants settings.
+
+Grants App Secrets Configuration (Streamlit Cloud -> Settings -> Secrets)
 # Supabase
 SUPABASE_URL = "https://<your-project>.supabase.co"
 SUPABASE_ANON_KEY = "<anon key>"
@@ -22,14 +26,19 @@ SUPABASE_SERVICE_ROLE_KEY = "<service role key>"   # required for admin & insert
 # Admin
 ADMIN_PASSWORD = "<your chosen admin password>"
 
-# SMTP (Office365)
-[smtp]
-host = "smtp.office365.com"
-port = 587
-user = "ray@lutinemanagement.com"
-password = "<Office365 app password>"
-from_addr = "ray@lutinemanagement.com"
-from_name = "NHCMA Foundation Grants"
+# Grants email (Microsoft Graph)
+MS_TENANT_ID = "..."
+MS_CLIENT_ID = "..."
+MS_CLIENT_SECRET = "..."
+MS_SENDER_EMAIL = "foundation@nhcma.org"
+ADMIN_NOTIFICATION_EMAIL = "office@nhcma.org"
+
+Notes
+- MS_SENDER_EMAIL must be a mailbox that your Entra app registration is authorized to send as (Mail.Send application permission plus mailbox/send-as authorization as required by your tenant policy).
+- ADMIN_NOTIFICATION_EMAIL receives administrative copy emails and is also used for applicant-facing contact references in grants templates.
+
+SMTP Configuration for Other Apps
+SMTP settings are not used by the Grants app anymore. If another app (such as the Posters app) still relies on SMTP, document and manage those SMTP settings in that app's README.
 
 Deadlines (built into app)
 
@@ -59,9 +68,9 @@ Emails
 
 To applicant: confirmation email with submission details
 
-CC: nhcma@lutinemanagement.com
+Administrative copy: ADMIN_NOTIFICATION_EMAIL (default office@nhcma.org)
 
-Sent from: ray@lutinemanagement.com (Office365 via SMTP)
+Sent from: MS_SENDER_EMAIL via Microsoft Graph application authentication
 
 Data Storage
 
