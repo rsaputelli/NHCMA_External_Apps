@@ -14,7 +14,6 @@ from supabase import create_client, Client
 import bcrypt
 import secrets
 from itsdangerous import URLSafeTimedSerializer
-from streamlit_cookies_manager import EncryptedCookieManager
 
 APP_TITLE = "NHCMA Foundation — Public Health Innovation Grants"
 TIMEZONE = "America/New_York"
@@ -285,7 +284,6 @@ APP_TITLE = f"NHCMA Foundation — {ACTIVE_APPLICATION_YEAR} Public Health Innov
 # ========= Judge PIN + Cookie Sessions (lazy init) =========
 SESSION_TTL_DAYS = int(st.secrets.get("SESSION_TTL_DAYS", "30"))
 BCRYPT_ROUNDS    = int(st.secrets.get("BCRYPT_ROUNDS", "12"))
-COOKIE_SIGNING_KEY = st.secrets["COOKIE_SIGNING_KEY"]
 
 # Lazy cookie/signing init so submissions aren’t affected
 cookies = None
@@ -295,16 +293,19 @@ def _ensure_cookie_env():
     """Initialize cookies + signer only when judging auth is in play."""
     global cookies, signer
     if cookies is not None and signer is not None:
-        return
-    # Import here to avoid global hard dependency during submission-only runs
-    from streamlit_cookies_manager import EncryptedCookieManager
-    from itsdangerous import URLSafeTimedSerializer
+        return True
+    try:
+        from streamlit_cookies_manager import EncryptedCookieManager
 
-    c = EncryptedCookieManager(prefix="nhcma_", password=COOKIE_SIGNING_KEY)
-    if not c.ready():
-        st.stop()
-    s = URLSafeTimedSerializer(COOKIE_SIGNING_KEY)
+        cookie_signing_key = st.secrets["COOKIE_SIGNING_KEY"]
+        c = EncryptedCookieManager(prefix="nhcma_", password=cookie_signing_key)
+        if not c.ready():
+            return False
+        s = URLSafeTimedSerializer(cookie_signing_key)
+    except Exception:
+        return False
     cookies, signer = c, s
+    return True
 
 def hash_pin(pin: str) -> str:
     salt = bcrypt.gensalt(rounds=BCRYPT_ROUNDS)
@@ -354,46 +355,68 @@ def _db_validate_session(token: str):
     if not token:
         return None
     rows = (sb_admin.table("judge_sessions")
-            .select("*, judges:judge_id(full_name,email)")
+            .select("*, judges:judge_id(full_name,email,is_active)")
             .eq("session_token", token)
             .limit(1).execute().data or [])
     if not rows:
         return None
     row = rows[0]
+    judge = row.get("judges") or {}
+    if not judge.get("is_active"):
+        return None
     exp = datetime.fromisoformat(row["expires_at"].replace("Z","")).astimezone(timezone.utc)
     if exp < datetime.now(timezone.utc):
         return None
     return {
         "judge_id": row["judge_id"],
-        "name": row["judges"]["full_name"],
-        "email": row["judges"]["email"],
+        "name": judge["full_name"],
+        "email": judge["email"],
     }
 
+def _db_revoke_session(token: str):
+    if not token:
+        return True
+    if not sb_admin:
+        return False
+    try:
+        sb_admin.table("judge_sessions").delete().eq("session_token", token).execute()
+        return True
+    except Exception:
+        return False
+
 def set_cookie_session(token: str):
-    _ensure_cookie_env()
-    signed = signer.dumps({"t": token})
-    # NEW API: dict-style assignment + save()
-    cookies["nhcma_judge"] = signed
-    cookies.save()
+    if not _ensure_cookie_env():
+        return False
+    try:
+        signed = signer.dumps({"t": token})
+        cookies["nhcma_judge"] = signed
+        cookies.save()
+        return True
+    except Exception:
+        return False
 
 def get_cookie_session():
-    _ensure_cookie_env()
-    # NEW API: dict-style get()
-    raw = cookies.get("nhcma_judge")
-    if not raw:
+    if not _ensure_cookie_env():
         return None
     try:
+        raw = cookies.get("nhcma_judge")
+        if not raw:
+            return None
         payload = signer.loads(raw, max_age=SESSION_TTL_DAYS * 24 * 3600)
         return payload.get("t")
     except Exception:
         return None
 
 def clear_cookie_session():
-    _ensure_cookie_env()
-    # NEW API: delete key then save()
-    if "nhcma_judge" in cookies:
-        del cookies["nhcma_judge"]
-        cookies.save()
+    if not _ensure_cookie_env():
+        return False
+    try:
+        if "nhcma_judge" in cookies:
+            del cookies["nhcma_judge"]
+            cookies.save()
+        return True
+    except Exception:
+        return False
 
     # ========= /Judge PIN + Cookie Sessions =========
 
@@ -2151,6 +2174,14 @@ def _resolve_token(judge_token: str):
         return None
     inv = inv[0]
     try:
+        expires_at = datetime.fromisoformat(str(inv.get("expires_at", "")).replace("Z", "+00:00"))
+        if expires_at.tzinfo is None or expires_at.utcoffset() is None:
+            return None
+        if expires_at.astimezone(timezone.utc) <= datetime.now(timezone.utc):
+            return None
+    except (OverflowError, TypeError, ValueError):
+        return None
+    try:
         judge = sb_admin.table("judges").select("*").eq("email", inv["email"]).single().execute().data
     except Exception:
         return None
@@ -2354,7 +2385,10 @@ def _consume_invite_from_query():
                     _db_set_pin(who["judge_id"], hash_pin(pin1))
                     # Create session + cookie
                     sess = _db_create_session(who["judge_id"])
-                    set_cookie_session(sess)
+                    if not set_cookie_session(sess):
+                        _db_revoke_session(sess)
+                        st.error("Judge sign-in is temporarily unavailable. Please try again later.")
+                        return
                     st.session_state["judge_session"] = {"judge_id": who["judge_id"], "email": who["email"], "name": who["name"]}
                     try:
                         if hasattr(st, "query_params"):
@@ -2367,7 +2401,10 @@ def _consume_invite_from_query():
 
         # Existing PIN → sign in with session + cookie
         sess = _db_create_session(who["judge_id"])
-        set_cookie_session(sess)
+        if not set_cookie_session(sess):
+            _db_revoke_session(sess)
+            st.error("Judge sign-in is temporarily unavailable. Please try again later.")
+            return
         st.session_state["judge_session"] = {"judge_id": who["judge_id"], "email": who["email"], "name": who["name"]}
         try:
             if hasattr(st, "query_params"):
@@ -2476,15 +2513,25 @@ with tab3:
 # --- Judging tab render ---
 if _judging_enabled():
     with tab4:
+        cookie_env_ready = _ensure_cookie_env()
+        if not cookie_env_ready:
+            st.error("Judge sign-in is temporarily unavailable. Please try again later.")
+
         # 1) If we already have a session, show logout
-        if "judge_session" in st.session_state:
+        logout_attempted = False
+        if cookie_env_ready and "judge_session" in st.session_state:
             if st.sidebar.button("Log out"):
-                clear_cookie_session()
+                logout_attempted = True
+                session_token = get_cookie_session()
+                session_revoked = not session_token or _db_revoke_session(session_token)
+                cookie_cleared = clear_cookie_session()
                 st.session_state.pop("judge_session", None)
-                st.rerun()
+                if session_revoked and cookie_cleared:
+                    st.rerun()
+                st.error("You are signed out in this tab, but the saved judge session could not be fully cleared. Please contact the administrator.")
 
         # 2) Otherwise try cookie first; then email+PIN fallback
-        if "judge_session" not in st.session_state:
+        if cookie_env_ready and "judge_session" not in st.session_state and not logout_attempted:
             tok = get_cookie_session()
             who = _db_validate_session(tok) if tok else None
             if who:
@@ -2495,21 +2542,25 @@ if _judging_enabled():
                     pin   = st.text_input("PIN", type="password", key="judge_login_pin")
                     if st.button("Sign in", key="judge_login_btn"):
                         j = _db_judge_by_email(email or "")
-                        if not j or not j.get("pin_hash") or not verify_pin(pin or "", j["pin_hash"]):
+                        if not j or not j.get("is_active") or not j.get("pin_hash") or not verify_pin(pin or "", j["pin_hash"]):
                             st.error("Invalid email or PIN.")
                         else:
                             sess = _db_create_session(j["id"])
-                            set_cookie_session(sess)
-                            st.session_state["judge_session"] = {"judge_id": j["id"], "email": j["email"], "name": j["full_name"]}
-                            st.rerun()
+                            if not set_cookie_session(sess):
+                                _db_revoke_session(sess)
+                                st.error("Judge sign-in is temporarily unavailable. Please try again later.")
+                            else:
+                                st.session_state["judge_session"] = {"judge_id": j["id"], "email": j["email"], "name": j["full_name"]}
+                                st.rerun()
                 st.stop()
 
         # 3) Safe to render portal
-        try:
-            judging_portal()
-        except Exception as e:
-            st.error("Judging tab failed to render.")
-            st.exception(e)
+        if cookie_env_ready:
+            try:
+                judging_portal()
+            except Exception as e:
+                st.error("Judging tab failed to render.")
+                st.exception(e)
 
 
 st.caption("© 2025 New Haven County Medical Association Foundation")
