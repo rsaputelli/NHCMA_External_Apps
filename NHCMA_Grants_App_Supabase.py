@@ -2424,8 +2424,8 @@ _consume_invite_from_query()
 # Header with logo + title
 col_logo, col_title = st.columns([1, 5], vertical_alignment="center")
 with col_logo:
-    if os.path.exists("assets/logo.jpg"):
-        st.image("assets/logo.jpg", width='stretch')
+    if os.path.exists("assets/nhcma_logo.png"):
+        st.image("assets/nhcma_logo.png", width='stretch')
     else:
         st.write("")  # blank if logo not present
 with col_title:
