@@ -2299,11 +2299,19 @@ def judging_portal():
     selected_row = submissions_year_track_df.loc[submissions_year_track_df["id"] == submission_id].iloc[0]
     path = selected_row.get("booklet_docx_path")
 
-    if path and str(path).strip().lower() not in {"", "none", "null"}:
-        url = make_signed_url(sb_srv, BUCKET_NAME, path, expires_in_seconds=24*3600)
-        st.link_button("⬇️ Download Booklet (DOCX)", url, use_container_width='stretch')
+    booklet_url = None
+    if isinstance(path, str) and path.strip().lower() not in {"", "none", "null", "nan"}:
+        try:
+            booklet_url = make_signed_url(
+                sb_srv, BUCKET_NAME, path.strip(), expires_in_seconds=24*3600
+            )
+        except Exception:
+            pass
+
+    if isinstance(booklet_url, str) and booklet_url.strip():
+        st.link_button("⬇️ Download Booklet (DOCX)", booklet_url, use_container_width='stretch')
     else:
-        st.info("No booklet for this submission yet.")
+        st.info("Booklet unavailable.")
 
 
     # Load any previous score by this judge
